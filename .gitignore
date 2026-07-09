@@ -1,0 +1,49 @@
+# Gradle / Android build output
+.gradle/
+build/
+**/build/
+captures/
+
+# Local IDE state
+.idea/
+*.iml
+.vscode/
+
+# Kotlin / Java local caches
+.kotlin/
+*.class
+
+# Local machine configuration
+local.properties
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+
+# Generated packages
+*.apk
+*.ap_
+*.apks
+*.aab
+*.aar
+*.idsig
+apk/
+
+# Runtime dumps and crash artifacts
+*.log
+hs_err_pid*.log
+replay_pid*.log
+java_pid*.hprof
+*.hprof
+*.trace
+
+# Analysis scratch space
+tmp/
+*.tmp
+.codex/
+.agents/
+
+# OS noise
+.DS_Store
+Thumbs.db

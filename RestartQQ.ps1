@@ -1,0 +1,1 @@
+adb shell am force-stop "com.tencent.qqlite" && adb shell am start -n "com.tencent.qqlite"/"com.tencent.qqnt.watch.mainframe.MainActivity"
