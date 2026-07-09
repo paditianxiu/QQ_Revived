@@ -14,6 +14,11 @@ QQ Revived 是一个基于 libxposed 的 Android 模块，目标宿主为 `com.t
 - 全局界面适配：Edge-to-edge、状态栏/导航栏透明、宿主 Watch UI 背景修正。
 - 兼容 Xposed 注入场景：自建 `LifecycleOwner`、`SavedStateRegistryOwner`、`ViewModelStoreOwner` 支撑宿主 View 中注入 Compose。
 
+
+## 宿主
+[📱 下载 QQ手表版 9.0.5](/apk/QQ手表版_9.0.5.apk)
+
+
 ## 目标环境
 
 - Android Gradle Plugin 9.2.1
@@ -21,6 +26,9 @@ QQ Revived 是一个基于 libxposed 的 Android 模块，目标宿主为 `com.t
 - compileSdk 37 / targetSdk 37 / minSdk 26
 - libxposed API 102，模块 `minApiVersion=101`
 - 目标宿主包名：`com.tencent.qqlite`
+
+## 交流群
+[💬 加入 Telegram 交流群](https://t.me/niubimokuai)
 
 ## 构建
 
