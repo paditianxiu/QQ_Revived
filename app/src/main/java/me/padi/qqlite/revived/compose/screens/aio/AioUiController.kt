@@ -22,6 +22,9 @@ internal interface AioUiController {
     fun openPeerPanel()
     fun updateDraft(value: String)
     fun sendDraft()
+    fun sendImage(path: String): Boolean
+    fun startVoiceCall(): Boolean
+    fun startVideoCall(): Boolean
     fun openEmojiPanel()
     fun requestEmotionCategories()
     fun clickEmotion(item: AioEmotionItem): Boolean

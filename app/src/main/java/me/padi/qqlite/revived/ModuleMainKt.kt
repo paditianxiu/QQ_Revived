@@ -24,6 +24,7 @@ import me.padi.qqlite.revived.hooks.common.StatusBarHook
 import me.padi.qqlite.revived.hooks.common.VideoReportHiddenApiHook
 import me.padi.qqlite.revived.hooks.common.WatchUiHook
 import me.padi.qqlite.revived.hooks.home.HomeComposeHook
+import me.padi.qqlite.revived.hooks.qav.QavComposeHook
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 
@@ -50,6 +51,7 @@ class ModuleMainKt : XposedModule() {
         VideoReportHiddenApiHook,
         HomeComposeHook,
         AioComposeHook,
+        QavComposeHook,
         HostLongPressMenuHook,
         AutoSizeHook,
         WatchUiHook

@@ -345,11 +345,11 @@ private fun AioTopBar(
             }
             Row(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 54.dp)
+                    .align(Alignment.CenterStart)
+                    .padding(start = 54.dp, end = 132.dp)
                     .clickable(onClick = controller::openPeerPanel),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.Start
             ) {
                 AioAvatar(
                     controller = controller,
@@ -388,20 +388,54 @@ private fun AioTopBar(
                     }
                 }
             }
-            IconButton(
-                onClick = controller::openPeerPanel,
-                minWidth = 40.dp,
-                minHeight = 40.dp,
-                cornerRadius = 20.dp,
-                backgroundColor = Color.Transparent,
-                modifier = Modifier.align(Alignment.CenterEnd)
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Filled.MoreVert,
-                    contentDescription = "聊天详情",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
-                )
+                if (peer.chatType == 1) {
+                    IconButton(
+                        onClick = controller::startVoiceCall,
+                        minWidth = 40.dp,
+                        minHeight = 40.dp,
+                        cornerRadius = 20.dp,
+                        backgroundColor = Color.Transparent
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Mic,
+                            contentDescription = "语音通话",
+                            tint = MiuixTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = controller::startVideoCall,
+                        minWidth = 40.dp,
+                        minHeight = 40.dp,
+                        cornerRadius = 20.dp,
+                        backgroundColor = Color.Transparent
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Videocam,
+                            contentDescription = "视频通话",
+                            tint = MiuixTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = controller::openPeerPanel,
+                    minWidth = 40.dp,
+                    minHeight = 40.dp,
+                    cornerRadius = 20.dp,
+                    backgroundColor = Color.Transparent
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "聊天详情",
+                        tint = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
         Box(

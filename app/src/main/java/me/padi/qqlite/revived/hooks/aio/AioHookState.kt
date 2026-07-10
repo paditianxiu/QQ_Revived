@@ -982,6 +982,44 @@ internal data class AioHookState(
         }.getOrNull()
     }
 
+    fun sendImage(peer: AioPeer, path: String): Boolean {
+        val normalizedPath = path.trim()
+            .removePrefix("file://")
+            .takeIf { it.isNotBlank() }
+            ?: return false
+        if (!File(normalizedPath).isFile) return false
+        return runCatching {
+            val element = createHostImageElement(normalizedPath) ?: return@runCatching false
+            sendHostElements(peer, java.util.ArrayList<Any>(1).apply { add(element) })
+        }.getOrDefault(false)
+    }
+
+    fun startAvCall(fragment: Any?, peer: AioPeer, isVideo: Boolean): Boolean {
+        if (fragment == null || !fragmentClass.isInstance(fragment)) return false
+        if (peer.chatType != SINGLE_CHAT_TYPE) return false
+        return runCatching {
+            val qavFacadeClass = classLoader.findOptionalClass(I_WATCH_QAV_FACADE_CLASS)
+                ?: return@runCatching false
+            val qavFacade = findQRouteApi(qavFacadeClass) ?: return@runCatching false
+            val context = fragment.invokeNoArg("requireContext") ?: return@runCatching false
+            val parentFragment = fragment.invokeNoArg("requireParentFragment")
+                ?: return@runCatching false
+            val method = qavFacade.javaClass.methods.firstOrNull { candidate ->
+                candidate.name == "goToAVScene" && candidate.parameterTypes.size == 6
+            } ?: return@runCatching false
+            method.invoke(
+                qavFacade,
+                context,
+                parentFragment,
+                peer.chatUin.takeIf { it > 0L }?.toString().orEmpty(),
+                peer.peerId,
+                peer.chatNick.orEmpty(),
+                isVideo
+            )
+            true
+        }.getOrDefault(false)
+    }
+
     fun tryOpenIme(root: View?, inputBarController: Any?): Boolean {
         if (clickInputBarView(inputBarController, inputBarImeContentField, "f")) {
             return true
@@ -1031,6 +1069,48 @@ internal data class AioHookState(
         if (elements.isEmpty()) return false
         watchAioListVmSendElementsMethod?.invoke(hostVm, elements) ?: return false
         return true
+    }
+
+    private fun createHostImageElement(path: String): Any? {
+        return runCatching {
+            val msgUtilClass = classLoader.findOptionalClass(MSG_UTIL_CLASS) ?: return@runCatching null
+            val msgUtil = msgUtilClass.getDeclaredField("a")
+                .apply { isAccessible = true }
+                .get(null)
+                ?: return@runCatching null
+            msgUtilClass.getDeclaredMethod(
+                "a",
+                String::class.java,
+                Integer.TYPE,
+                String::class.java
+            ).apply { isAccessible = true }
+                .invoke(msgUtil, path, HOST_IMAGE_SUB_TYPE, null)
+        }.getOrNull()
+    }
+
+    private fun sendHostElements(peer: AioPeer, elements: java.util.ArrayList<Any>): Boolean {
+        if (elements.isEmpty()) return false
+        val msgServiceApiClass = classLoader.findOptionalClass(HOST_MSG_SERVICE_API_CLASS) ?: return false
+        val msgService = findQRouteApi(msgServiceApiClass) ?: return false
+        val contactClass = classLoader.findOptionalClass(HOST_CONTACT_CLASS) ?: return false
+        val contact = contactClass.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+        contactClass.setIntFieldIfPresent(contact, "chatType", peer.chatType)
+        contactClass.setObjectFieldIfPresent(contact, "peerUid", peer.peerId)
+        val sendMsgMethod = msgService.javaClass.methods.firstOrNull { method ->
+            method.name == "sendMsg" && method.parameterTypes.size == 4
+        } ?: return false
+        sendMsgMethod.invoke(msgService, contact, 0L, elements, null)
+        return true
+    }
+
+    private fun findQRouteApi(apiClass: Class<*>): Any? {
+        val qRouteClass = classLoader.findOptionalClass(Q_ROUTE_CLASS) ?: return null
+        val apiMethod = qRouteClass.methods.firstOrNull { method ->
+            method.name == "api" &&
+                method.parameterTypes.size == 1 &&
+                method.parameterTypes[0] == Class::class.java
+        } ?: return null
+        return apiMethod.invoke(null, apiClass)
     }
 
     private fun Any.findHostWatchAioListVm(): Any? {
@@ -1420,7 +1500,11 @@ internal data class AioHookState(
         private val HIDDEN_BIG_STICKER_CODES = setOf(392, 393, 394)
 
         private const val MOBILE_QQ_CLASS = "mqq.app.MobileQQ"
+        private const val Q_ROUTE_CLASS = "com.tencent.mobileqq.qroute.QRoute"
         private const val I_KERNEL_SERVICE_CLASS = "com.tencent.qqnt.kernel.api.IKernelService"
+        private const val HOST_CONTACT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.Contact"
+        private const val HOST_MSG_SERVICE_API_CLASS = "com.tencent.qqnt.msg.api.IMsgService"
+        private const val I_WATCH_QAV_FACADE_CLASS = "com.tencent.qqnt.watch.IWatchQavFacade"
         private const val I_KERNEL_MSG_LISTENER_CLASS =
             "com.tencent.qqnt.kernel.nativeinterface.IKernelMsgListener"
         private const val GPRO_EMOJI_DOWNLOAD_PARAMS_CLASS =
@@ -1455,6 +1539,8 @@ internal data class AioHookState(
         private const val COLOR_ADMIN_TEXT = 0xFF0088EE.toInt()
         private const val COLOR_OWNER_BG = 0xFF412917.toInt()
         private const val COLOR_OWNER_TEXT = 0xFFFF8D40.toInt()
+        private const val HOST_IMAGE_SUB_TYPE = 0
+        private const val SINGLE_CHAT_TYPE = 1
 
         fun create(classLoader: ClassLoader): AioHookState {
             val watchAIOFragmentClass = classLoader.findTargetClass(WATCH_AIO_FRAGMENT_CLASS)
@@ -1752,6 +1838,18 @@ private fun Method.invokeMapPath(target: Any): String? {
     val map = invokeAny(target) as? Map<*, *> ?: return null
     return map.values.firstNotNullOfOrNull { value ->
         value?.toString()?.takeIf { it.isNotBlank() }
+    }
+}
+
+private fun Class<*>.setIntFieldIfPresent(target: Any, name: String, value: Int) {
+    runCatching {
+        findOptionalField(this, name)?.setInt(target, value)
+    }
+}
+
+private fun Class<*>.setObjectFieldIfPresent(target: Any, name: String, value: Any?) {
+    runCatching {
+        findOptionalField(this, name)?.set(target, value)
     }
 }
 

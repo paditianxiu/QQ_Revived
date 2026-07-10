@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import me.padi.qqlite.revived.ModuleMainKt
 import me.padi.qqlite.revived.compose.screens.aio.AioUiController
+import me.padi.qqlite.revived.hooks.qav.QavRuntimeStore
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
@@ -260,6 +261,18 @@ internal class AioBinding(
         }
     }
 
+    override fun sendImage(path: String): Boolean {
+        return runCatching {
+            hookState.sendImage(currentState.peer, path)
+        }.onFailure {
+            module.logHook(Log.WARN, "AIO compose image send failed path=$path", it)
+        }.getOrDefault(false)
+    }
+
+    override fun startVoiceCall(): Boolean = startAvCall(isVideo = false)
+
+    override fun startVideoCall(): Boolean = startAvCall(isVideo = true)
+
     override fun openEmojiPanel() {
         val inputBar = inputBarControllerRef?.get()
             ?: AioRuntimeStore.latestInputBarController?.get()
@@ -493,6 +506,24 @@ internal class AioBinding(
         return itemView.findHostMediaSource()
     }
 
+    private fun startAvCall(isVideo: Boolean): Boolean {
+        val peer = currentState.peer
+        if (peer.chatType != SINGLE_CHAT_TYPE) {
+            return false
+        }
+        return runCatching {
+            QavRuntimeStore.rememberOutgoingCall(isVideo)
+            hookState.startAvCall(hostFragment(), peer, isVideo)
+        }.onFailure {
+            module.logHook(
+                Log.WARN,
+                "AIO compose ${if (isVideo) "video" else "voice"} call failed peer=${peer.peerId}",
+                it
+            )
+            QavRuntimeStore.clearOutgoingCall()
+        }.getOrDefault(false)
+    }
+
     private fun updateState(transform: (AioUiState) -> AioUiState) {
         val next = transform(_uiState.value)
         _uiState.value = next
@@ -700,6 +731,7 @@ internal class AioBinding(
         const val RENDER_REFRESH_DELAY_MS = 80L
         const val LOAD_OLDER_TIMEOUT_MS = 3000L
         const val RELEASE_AIO_AFTER_BACK_DELAY_MS = 120L
+        const val SINGLE_CHAT_TYPE = 1
         const val GROUP_CHAT_TYPE = 2
         const val EMOTION_CATEGORY_FAVORITE = "favorite"
         const val EMOTION_CATEGORY_SYSTEM = "system"
