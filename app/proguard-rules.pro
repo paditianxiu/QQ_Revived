@@ -19,3 +19,25 @@
 -keep,allowoptimization,allowobfuscation public class * extends io.github.libxposed.api.XposedModule {
     public <init>();
 }
+
+# Keep ViewTree owner bridge classes and their static get/set methods.
+# These are accessed by exact class/method names via reflection in HostComposeView.kt.
+-keep class androidx.lifecycle.ViewTreeLifecycleOwner {
+    public static ** get(android.view.View);
+    public static void set(android.view.View, androidx.lifecycle.LifecycleOwner);
+}
+
+-keep class androidx.lifecycle.ViewTreeViewModelStoreOwner {
+    public static ** get(android.view.View);
+    public static void set(android.view.View, androidx.lifecycle.ViewModelStoreOwner);
+}
+
+-keep class androidx.savedstate.ViewTreeSavedStateRegistryOwner {
+    public static ** get(android.view.View);
+    public static void set(android.view.View, androidx.savedstate.SavedStateRegistryOwner);
+}
+
+-keep class androidx.navigationevent.ViewTreeNavigationEventDispatcherOwner {
+    public static ** get(android.view.View);
+    public static void set(android.view.View, androidx.navigationevent.NavigationEventDispatcherOwner);
+}
