@@ -257,8 +257,6 @@ internal class AioBinding(
             updateState { state ->
                 state.copy(scrollToBottomRequest = state.scrollToBottomRequest + 1L)
             }
-        } else if (text.isNotBlank()) {
-            updateDraft(text)
         }
     }
 
