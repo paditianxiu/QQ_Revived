@@ -18,6 +18,7 @@ internal object AioRuntimeStore {
     var latestMsgRepo: WeakReference<Any>? = null
     var latestAioListVb: WeakReference<Any>? = null
     var latestInputBarController: WeakReference<Any>? = null
+    var latestNickNameAbility: WeakReference<Any>? = null
     var disabledHomeComposeView: WeakReference<View>? = null
     var disabledHomeComposeState: ViewState? = null
     var creatingFragment: WeakReference<Any>? = null
@@ -28,6 +29,7 @@ internal object AioRuntimeStore {
     val snapshotsByPeer = LinkedHashMap<String, AioUiState>()
     private val pendingMessages = WeakHashMap<Any, MutableList<AioMessage>>()
     private val orphanPendingMessages = ArrayList<AioMessage>()
+    private var latestMemberInfoCache: Map<String, Any>? = null
 
     fun reset() {
         latestBinding = null
@@ -35,6 +37,7 @@ internal object AioRuntimeStore {
         latestMsgRepo = null
         latestAioListVb = null
         latestInputBarController = null
+        latestNickNameAbility = null
         disabledHomeComposeView = null
         disabledHomeComposeState = null
         creatingFragment = null
@@ -45,6 +48,7 @@ internal object AioRuntimeStore {
         snapshotsByPeer.clear()
         orphanPendingMessages.clear()
         pendingMessages.clear()
+        latestMemberInfoCache = null
     }
 
     fun registerBinding(root: View, hostFragment: Any?, binding: AioBinding) {
@@ -71,6 +75,30 @@ internal object AioRuntimeStore {
         if (inputBarController != null) {
             latestInputBarController = WeakReference(inputBarController)
         }
+    }
+
+    fun rememberNickNameAbility(ability: Any?, cacheField: java.lang.reflect.Field?) {
+        if (ability != null) {
+            latestNickNameAbility = WeakReference(ability)
+        }
+        latestMemberInfoCache = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            cacheField?.get(ability) as? Map<String, Any>
+        }.getOrNull() ?: latestMemberInfoCache
+    }
+
+    fun findMemberInfo(uid: String): Any? {
+        if (uid.isBlank()) return null
+        val cache = latestMemberInfoCache ?: return null
+        return cache[uid]
+    }
+
+    fun mergeMemberInfoCache(infos: Map<String, Any>) {
+        if (infos.isEmpty()) return
+        val merged = LinkedHashMap<String, Any>()
+        latestMemberInfoCache?.let(merged::putAll)
+        merged.putAll(infos)
+        latestMemberInfoCache = merged
     }
 
     fun markAioSurfaceActive() {

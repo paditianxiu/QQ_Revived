@@ -86,8 +86,9 @@ internal fun ContactsPage(
             onQueryChange = { searchText = it },
             expanded = searchExpanded,
             onExpandedChange = { searchExpanded = it },
-            resultCount = filteredContactRows.size
         )
+
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -153,7 +154,6 @@ private fun ContactSearchBar(
     onQueryChange: (String) -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
-    resultCount: Int
 ) {
     val inputModifier = if (expanded) {
         Modifier
@@ -165,23 +165,20 @@ private fun ContactSearchBar(
         }
     }
     SearchBar(
+        modifier = Modifier.padding(bottom = 6.dp),
         inputField = {
-            Column{
-                InputField(
-                    query = query,
-                    onQueryChange = onQueryChange,
-                    onSearch = { onExpandedChange(false) },
-                    expanded = expanded,
-                    onExpandedChange = onExpandedChange,
-                    modifier = inputModifier,
-                    label = "搜索联系人",
-                    enabled = expanded
-                )
-                Spacer(Modifier.height(4.dp))
-            }
+            InputField(
+                query = query,
+                onQueryChange = onQueryChange,
+                onSearch = { onExpandedChange(false) },
+                expanded = expanded,
+                onExpandedChange = onExpandedChange,
+                modifier = inputModifier,
+                label = "搜索联系人",
+                enabled = expanded
+            )
         }, expanded = expanded, onExpandedChange = onExpandedChange
     ) {
-
     }
 }
 
@@ -199,8 +196,7 @@ private fun ContactRow.shortcutOrder(): Int {
 
 @Composable
 private fun ContactListHeader(
-    title: String,
-    count: Int
+    title: String, count: Int
 ) {
     Row(
         modifier = Modifier
@@ -291,7 +287,7 @@ private fun ContactShortcutCard(
     onLongClick: () -> Unit
 ) {
     Card(
-        modifier = modifier.height(116.dp),
+        modifier = modifier,
         pressFeedbackType = PressFeedbackType.Sink,
         showIndication = true,
         onClick = onClick,

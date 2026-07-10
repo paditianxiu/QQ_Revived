@@ -25,7 +25,26 @@ data class AioUiState(
     val loadingOlder: Boolean = false,
     val emotionCategories: List<AioEmotionCategory> = emptyList(),
     val renderRevision: Long = 0L,
-    val scrollToBottomRequest: Long = 0L
+    val scrollToBottomRequest: Long = 0L,
+    val longPressMenu: AioLongPressMenuState? = null,
+    val firstVisibleMessageKey: String? = null,
+    val firstVisibleMessageOffset: Int = 0
+)
+
+data class AioLongPressMenuState(
+    val anchorX: Int,
+    val anchorY: Int,
+    val items: List<AioLongPressMenuItem>
+)
+
+data class AioLongPressMenuItem(
+    val label: String
+)
+
+data class AioMessageBadge(
+    val text: String,
+    val colorArgb: Int? = null,
+    val backgroundColorArgb: Int? = null
 )
 
 data class AioMessage(
@@ -40,6 +59,10 @@ data class AioMessage(
     val renderKind: AioMessageKind,
     val rawKind: AioMessageKind = AioMessageKind.Unsupported,
     val text: String,
+    val senderName: String = "",
+    val badges: List<AioMessageBadge> = emptyList(),
+    val showTimeDivider: Boolean = false,
+    val timeDividerText: String = "",
     val media: AioMediaSpec? = null,
     val avatar: AvatarSpec? = null,
     val itemViewRef: WeakReference<View>? = null
@@ -137,6 +160,8 @@ enum class AioMessageKind(val value: Int) {
 data class AioMediaSpec(
     val localPath: String? = null,
     val remoteUrl: String? = null,
+    val previewPath: String? = null,
+    val playbackPath: String? = null,
     val width: Int = 0,
     val height: Int = 0,
     val durationSeconds: Int = 0,
@@ -144,7 +169,9 @@ data class AioMediaSpec(
     val fileSize: Long = 0L
 ) {
     val displayPath: String?
-        get() = localPath?.takeIf { it.isNotBlank() } ?: remoteUrl?.takeIf { it.isNotBlank() }
+        get() = previewPath?.takeIf { it.isNotBlank() }
+            ?: localPath?.takeIf { it.isNotBlank() }
+            ?: remoteUrl?.takeIf { it.isNotBlank() }
 }
 
 data class AioEmotionCategory(

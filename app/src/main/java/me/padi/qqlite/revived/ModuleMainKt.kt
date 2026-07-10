@@ -14,6 +14,8 @@ import me.padi.qqlite.revived.di.RevivedKoin
 import me.padi.qqlite.revived.hooks.aio.AioComposeHook
 import me.padi.qqlite.revived.hooks.common.AutoSizeHook
 import me.padi.qqlite.revived.hooks.common.BaseHook
+import me.padi.qqlite.revived.hooks.common.HostThemeHook
+import me.padi.qqlite.revived.hooks.common.HostLongPressMenuHook
 import me.padi.qqlite.revived.hooks.common.ModuleHookChain
 import me.padi.qqlite.revived.hooks.common.MsfAliveJobHook
 import me.padi.qqlite.revived.hooks.common.OrientationHook
@@ -38,6 +40,7 @@ class ModuleMainKt : XposedModule() {
     private val frameworkHooks: List<BaseHook> = listOf(
         MsfAliveJobHook,
         PhoneResourcesHook,
+        HostThemeHook,
         StatusBarHook,
         OrientationHook
     )
@@ -47,6 +50,7 @@ class ModuleMainKt : XposedModule() {
         VideoReportHiddenApiHook,
         HomeComposeHook,
         AioComposeHook,
+        HostLongPressMenuHook,
         AutoSizeHook,
         WatchUiHook
     )

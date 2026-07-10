@@ -2,21 +2,25 @@ package me.padi.qqlite.revived.compose.screens.aio
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Build
 import android.view.View
 import android.view.WindowInsetsController
 import android.widget.ImageView
+import android.widget.VideoView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,7 +42,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,12 +70,16 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -81,12 +89,21 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.drawable.toBitmap
 import androidx.core.graphics.withClip
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
+import com.github.panpf.zoomimage.CoilZoomAsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -95,14 +112,19 @@ import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
 import me.padi.qqlite.revived.shared.model.aio.AioMediaSpec
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
+import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
+import me.padi.qqlite.revived.shared.model.aio.AioLongPressMenuState
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.DropdownImpl
+import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
+import top.yukonga.miuix.kmp.basic.ListPopupColumn
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
@@ -112,20 +134,24 @@ import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
 import top.yukonga.miuix.kmp.window.WindowBottomSheet
+import top.yukonga.miuix.kmp.window.WindowListPopup
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
+import kotlin.math.roundToInt
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.lazy.grid.items as gridItems
 
 @Composable
 internal fun AioChatScreen(controller: AioUiController) {
     val uiState by controller.uiState.collectAsState()
+    val pagingMessages = controller.pagingMessages.collectAsLazyPagingItems()
 
     MiuixTheme(
         controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.System) }
     ) {
         var showEmojiSheet by remember { mutableStateOf(false) }
+        var previewMessage by remember { mutableStateOf<AioMessage?>(null) }
         ApplyAioEdgeToEdge()
         Scaffold(
             topBar = {
@@ -150,15 +176,22 @@ internal fun AioChatScreen(controller: AioUiController) {
                     .background(MiuixTheme.colorScheme.secondaryVariant)
                     .padding(padding)
             ) {
-                if (uiState.loading && uiState.messages.isEmpty()) {
+                if (uiState.loading && pagingMessages.itemCount == 0) {
                     AioLoading()
                 } else {
                     AioMessageList(
-                        messages = uiState.messages,
+                        messages = pagingMessages,
                         loadingOlder = uiState.loadingOlder,
                         renderRevision = uiState.renderRevision,
                         scrollToBottomRequest = uiState.scrollToBottomRequest,
+                        initialFirstVisibleMessageKey = uiState.firstVisibleMessageKey,
+                        initialFirstVisibleMessageOffset = uiState.firstVisibleMessageOffset,
                         controller = controller,
+                        onPreviewMessage = { previewMessage = it },
+                        onLongPressMessage = { message, anchor ->
+                            controller.rememberLongPressAnchor(anchor)
+                            controller.longClickMessage(message)
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -178,6 +211,15 @@ internal fun AioChatScreen(controller: AioUiController) {
                 controller.clickEmotion(item)
                 showEmojiSheet = false
             }
+        )
+        AioMediaPreviewSheet(
+            message = previewMessage,
+            onDismissRequest = { previewMessage = null }
+        )
+        AioLongPressMenuPopup(
+            state = uiState.longPressMenu,
+            onDismissRequest = controller::dismissLongPressMenu,
+            onSelectIndex = controller::selectLongPressMenu
         )
     }
 }
@@ -373,61 +415,75 @@ private fun AioTopBar(
 
 @Composable
 private fun AioMessageList(
-    messages: List<AioMessage>,
+    messages: LazyPagingItems<AioMessage>,
     loadingOlder: Boolean,
     renderRevision: Long,
     scrollToBottomRequest: Long,
+    initialFirstVisibleMessageKey: String?,
+    initialFirstVisibleMessageOffset: Int,
     controller: AioUiController,
+    onPreviewMessage: (AioMessage) -> Unit,
+    onLongPressMessage: (AioMessage, IntOffset) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (messages.isEmpty()) {
+    val snapshotMessages = messages.itemSnapshotList.items
+    if (snapshotMessages.isEmpty()) {
         AioEmptyMessages(modifier)
         return
     }
 
     val listState = rememberLazyListState()
     var didInitialScroll by remember { mutableStateOf(false) }
+    val restoreMessageKey = remember { initialFirstVisibleMessageKey }
+    val restoreMessageOffset = remember { initialFirstVisibleMessageOffset }
     var loadOlderArmed by remember { mutableStateOf(false) }
     var anchoredFirstMessageKey by remember { mutableStateOf<String?>(null) }
     var anchoredFirstVisibleOffset by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(messages.size) {
-        if (!didInitialScroll && messages.isNotEmpty()) {
-            listState.scrollToItem(messages.size)
+    LaunchedEffect(messages.itemCount) {
+        if (!didInitialScroll && messages.itemCount > 0) {
+            val restoredIndex = restoreMessageKey
+                ?.let { key -> snapshotMessages.indexOfFirst { it.key == key } }
+                ?.takeIf { it >= 0 }
+            if (restoredIndex != null) {
+                listState.scrollToItem(restoredIndex, restoreMessageOffset)
+            } else {
+                listState.scrollToItem(messages.itemCount)
+            }
             didInitialScroll = true
         }
     }
 
-    LaunchedEffect(messages.firstOrNull()?.key, messages.size, loadingOlder) {
+    LaunchedEffect(snapshotMessages.firstOrNull()?.key, messages.itemCount, loadingOlder) {
         val anchorKey = anchoredFirstMessageKey ?: return@LaunchedEffect
         if (loadingOlder) return@LaunchedEffect
-        val newIndex = messages.indexOfFirst { it.key == anchorKey }
+        val newIndex = snapshotMessages.indexOfFirst { it.key == anchorKey }
         if (newIndex >= 0) {
-            val targetIndex = (newIndex + 1).coerceAtMost(messages.size)
+            val targetIndex = (newIndex + 1).coerceAtMost(messages.itemCount)
             listState.scrollToItem(targetIndex, anchoredFirstVisibleOffset)
         }
         anchoredFirstMessageKey = null
     }
 
-    LaunchedEffect(messages.lastOrNull()?.key, loadingOlder) {
-        if (!didInitialScroll || messages.isEmpty() || loadingOlder) return@LaunchedEffect
-        val lastMessage = messages.last()
+    LaunchedEffect(snapshotMessages.lastOrNull()?.key, loadingOlder) {
+        if (!didInitialScroll || snapshotMessages.isEmpty() || loadingOlder) return@LaunchedEffect
+        val lastMessage = snapshotMessages.last()
         val totalItems = listState.layoutInfo.totalItemsCount
         val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
         if (lastMessage.isSelf || lastVisibleIndex >= totalItems - 3) {
-            listState.animateScrollToItem(messages.size)
+            listState.animateScrollToItem(messages.itemCount)
         }
     }
 
-    LaunchedEffect(scrollToBottomRequest, messages.size, didInitialScroll) {
-        if (scrollToBottomRequest <= 0L || !didInitialScroll || messages.isEmpty()) {
+    LaunchedEffect(scrollToBottomRequest, messages.itemCount, didInitialScroll) {
+        if (scrollToBottomRequest <= 0L || !didInitialScroll || messages.itemCount == 0) {
             return@LaunchedEffect
         }
-        listState.animateScrollToItem(messages.size)
+        listState.animateScrollToItem(messages.itemCount)
     }
 
-    LaunchedEffect(listState, messages.size, didInitialScroll) {
-        if (!didInitialScroll || messages.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(listState, messages.itemCount, didInitialScroll) {
+        if (!didInitialScroll || messages.itemCount == 0) return@LaunchedEffect
         snapshotFlow {
             listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
                 item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
@@ -437,21 +493,40 @@ private fun AioMessageList(
             .collect(controller::syncHostListPosition)
     }
 
-    LaunchedEffect(listState, didInitialScroll) {
-        if (!didInitialScroll || messages.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(listState, didInitialScroll, messages.itemCount) {
+        if (!didInitialScroll || messages.itemCount == 0) return@LaunchedEffect
         snapshotFlow {
-            listState.isScrollInProgress to listState.firstVisibleItemIndex
+            listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
+                item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
+            }?.let { item ->
+                (item.key as? String) to item.offset
+            }
         }
             .distinctUntilChanged()
-            .collect { (scrolling, firstIndex) ->
-                if (scrolling && firstIndex > 2) {
+            .collect { snapshot ->
+                controller.updateScrollSnapshot(snapshot?.first, snapshot?.second ?: 0)
+            }
+    }
+
+    LaunchedEffect(listState, didInitialScroll, messages.itemCount) {
+        if (!didInitialScroll || messages.itemCount == 0) return@LaunchedEffect
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        }
+            .distinctUntilChanged()
+            .collect { (scrolling, firstIndex, firstOffset) ->
+                if (scrolling && (firstIndex > 0 || firstOffset > 0)) {
                     loadOlderArmed = true
                 }
             }
     }
 
-    LaunchedEffect(listState, messages.size, loadingOlder, didInitialScroll, loadOlderArmed) {
-        if (!didInitialScroll || messages.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(listState, messages.itemCount, loadingOlder, didInitialScroll, loadOlderArmed) {
+        if (!didInitialScroll || messages.itemCount == 0) return@LaunchedEffect
         snapshotFlow {
             listState.isScrollInProgress &&
                     listState.firstVisibleItemIndex == 0 &&
@@ -466,7 +541,7 @@ private fun AioMessageList(
                         item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
                     }
                     anchoredFirstMessageKey = anchorItem?.key as? String
-                        ?: messages.firstOrNull()?.key
+                        ?: snapshotMessages.firstOrNull()?.key
                     anchoredFirstVisibleOffset = anchorItem?.offset ?: 0
                     loadOlderArmed = false
                     controller.loadOlderMessages()
@@ -483,12 +558,21 @@ private fun AioMessageList(
         item(key = "aio-load-older") {
             LoadOlderIndicator(loadingOlder)
         }
-        items(messages, key = { it.key }) { message ->
-            AioMessageRow(
-                message = message,
-                renderRevision = renderRevision,
-                controller = controller
-            )
+        items(
+            count = messages.itemCount,
+            key = messages.itemKey { it.key }
+        ) { index ->
+            messages[index]?.let { message ->
+                val previousMessage = if (index > 0) messages[index - 1] else null
+                AioMessageRow(
+                    message = message,
+                    previousMessage = previousMessage,
+                    renderRevision = renderRevision,
+                    controller = controller,
+                    onPreviewMessage = onPreviewMessage,
+                    onLongPressMessage = onLongPressMessage
+                )
+            }
         }
         item(key = "aio-bottom-spacer") {
             Spacer(modifier = Modifier.height(6.dp))
@@ -527,54 +611,135 @@ private fun LoadOlderIndicator(loading: Boolean) {
 @Composable
 private fun AioMessageRow(
     message: AioMessage,
+    previousMessage: AioMessage?,
     renderRevision: Long,
-    controller: AioUiController
+    controller: AioUiController,
+    onPreviewMessage: (AioMessage) -> Unit,
+    onLongPressMessage: (AioMessage, IntOffset) -> Unit
 ) {
     if (message.renderKind == AioMessageKind.Tip) {
         TipMessage(message.text)
         return
     }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (message.isSelf) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Top
-    ) {
-        if (!message.isSelf) {
-            AioAvatar(
-                controller = controller,
-                message = message,
-                spec = message.avatar,
-                fallback = message.senderUid.take(1),
-                size = 32
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (shouldShowTimeDivider(message, previousMessage) && message.timeDividerText.isNotBlank()) {
+            MessageTimeDivider(message.timeDividerText)
         }
-        MessageBubble(
-            message = message,
-            renderRevision = renderRevision,
-            controller = controller,
-            modifier = Modifier.widthIn(max = 292.dp)
-        )
-        if (message.isSelf) {
-            Spacer(modifier = Modifier.width(8.dp))
-            AioAvatar(
-                controller = controller,
-                message = message,
-                spec = message.avatar,
-                fallback = "我",
-                size = 32
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (message.isSelf) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Top
+        ) {
+            if (!message.isSelf) {
+                AioAvatar(
+                    controller = controller,
+                    message = message,
+                    spec = message.avatar,
+                    fallback = message.senderName.ifBlank { message.senderUid }.take(1),
+                    size = 32
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Column(
+                horizontalAlignment = if (message.isSelf) Alignment.End else Alignment.Start
+            ) {
+                MessageMetaLine(
+                    name = message.senderName.ifBlank { if (message.isSelf) "我" else message.senderUid },
+                    badges = message.badges,
+                    alignEnd = message.isSelf,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                MessageBubble(
+                    message = message,
+                    renderRevision = renderRevision,
+                    controller = controller,
+                    onPreviewMessage = onPreviewMessage,
+                    onLongPressMessage = onLongPressMessage,
+                    modifier = Modifier.widthIn(max = 292.dp)
+                )
+            }
+            if (message.isSelf) {
+                Spacer(modifier = Modifier.width(8.dp))
+                AioAvatar(
+                    controller = controller,
+                    message = message,
+                    spec = message.avatar,
+                    fallback = "我",
+                    size = 32
+                )
+            }
+        }
+    }
+}
+
+private fun shouldShowTimeDivider(message: AioMessage, previousMessage: AioMessage?): Boolean {
+    if (message.showTimeDivider) return true
+    if (previousMessage == null) return true
+    val currentTime = message.msgTime
+    val previousTime = previousMessage.msgTime
+    if (currentTime <= 0L || previousTime <= 0L) return false
+    val currentSeconds = normalizeMessageEpochSeconds(currentTime)
+    val previousSeconds = normalizeMessageEpochSeconds(previousTime)
+    return currentSeconds - previousSeconds >= 5 * 60
+}
+
+private fun normalizeMessageEpochSeconds(value: Long): Long {
+    return if (value > 100_000_000_000L) value / 1000L else value
+}
+
+@Composable
+private fun MessageMetaLine(
+    name: String,
+    badges: List<AioMessageBadge>,
+    alignEnd: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start
+    ) {
+        if (!alignEnd) {
+            Text(
+                text = name,
+                color = Color(0xFF545454),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            badges.forEach { badge ->
+                Spacer(modifier = Modifier.width(6.dp))
+                MessageBadge(badge)
+            }
+        } else {
+            badges.forEachIndexed { index, badge ->
+                MessageBadge(badge)
+                if (index != badges.lastIndex) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+            }
+            if (badges.isNotEmpty()) {
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Text(
+                text = name,
+                color = Color(0xFF545454),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: AioMessage,
     renderRevision: Long,
     controller: AioUiController,
+    onPreviewMessage: (AioMessage) -> Unit,
+    onLongPressMessage: (AioMessage, IntOffset) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val color = if (message.isSelf) {
@@ -588,22 +753,42 @@ private fun MessageBubble(
         MiuixTheme.colorScheme.onSurface
     }
 
+    var bubblePositionInWindow by remember(message.key) { mutableStateOf(Offset.Zero) }
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
             .background(color)
-            .combinedClickable(
-                onClick = { controller.clickMessage(message) },
-                onLongClick = { controller.longClickMessage(message) }
-            )
+            .onGloballyPositioned { coordinates ->
+                bubblePositionInWindow = coordinates.positionInWindow()
+            }
+            .pointerInput(message.key, bubblePositionInWindow) {
+                detectTapGestures(
+                    onTap = {
+                    when (message.renderKind) {
+                        AioMessageKind.Image,
+                        AioMessageKind.Giphy -> onPreviewMessage(message)
+
+                        else -> controller.clickMessage(message)
+                    }
+                    },
+                    onLongPress = { pressOffset ->
+                        onLongPressMessage(
+                            message,
+                            IntOffset(
+                                x = (bubblePositionInWindow.x + pressOffset.x).roundToInt(),
+                                y = (bubblePositionInWindow.y + pressOffset.y).roundToInt()
+                            )
+                        )
+                    }
+                )
+            }
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             when (message.renderKind) {
                 AioMessageKind.Text -> TextMessageContent(message, contentColor)
-                AioMessageKind.Image -> ImageMessageContent(
+                AioMessageKind.Image,
+                AioMessageKind.Giphy -> ImageMessageContent(
                     message,
-                    renderRevision,
-                    controller,
                     contentColor
                 )
 
@@ -626,7 +811,6 @@ private fun MessageBubble(
                 AioMessageKind.Wallet,
                 AioMessageKind.ArkStruct,
                 AioMessageKind.StructLongMsg,
-                AioMessageKind.Giphy,
                 AioMessageKind.Gift,
                 AioMessageKind.TextGift,
                 AioMessageKind.OnlineFile,
@@ -642,17 +826,43 @@ private fun MessageBubble(
 
                 AioMessageKind.Tip -> TextMessageContent(message, contentColor)
             }
-            Text(
-                text = formatMessageTime(message.msgTime),
-                color = contentColor.copy(alpha = 0.64f),
-                fontSize = 10.sp,
-                maxLines = 1,
-                modifier = Modifier
-                    .align(if (message.isSelf) Alignment.End else Alignment.Start)
-                    .padding(top = 4.dp)
-            )
         }
     }
+}
+
+@Composable
+private fun MessageTimeDivider(text: String) {
+    Text(
+        text = text,
+        color = Color(0xFF999999),
+        fontSize = 11.sp,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    )
+}
+
+@Composable
+private fun MessageBadge(badge: AioMessageBadge) {
+    val accent = badge.colorArgb?.let(::Color) ?: Color(0xFFF08A24)
+    val background = badge.backgroundColorArgb?.let(::Color) ?: accent.copy(alpha = 0.12f)
+    val border = if (badge.backgroundColorArgb != null) {
+        background.copy(alpha = 0.9f)
+    } else {
+        accent.copy(alpha = 0.32f)
+    }
+    Text(
+        text = badge.text,
+        color = accent,
+        fontSize = 10.sp,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .border(0.5.dp, border, RoundedCornerShape(8.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    )
 }
 
 @Composable
@@ -668,26 +878,16 @@ private fun TextMessageContent(message: AioMessage, contentColor: Color) {
 @Composable
 private fun ImageMessageContent(
     message: AioMessage,
-    renderRevision: Long,
-    controller: AioUiController,
     contentColor: Color
 ) {
     val media = message.media
-    HostMessagePreview(
+    ImagePreviewFrame(
         message = message,
-        renderRevision = renderRevision,
-        controller = controller,
+        media = media,
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(resolveAspectRatio(media, 4f / 3f))
-    ) {
-        MediaPreviewFrame(
-            media = media,
-            icon = Icons.Filled.Image,
-            contentDescription = "图片",
-            modifier = Modifier.fillMaxSize()
-        )
-    }
+    )
     if (message.text.isNotBlank() && message.text != "图片") {
         Text(
             text = message.text,
@@ -723,6 +923,7 @@ private fun VideoMessageContent(
                 media = media,
                 icon = Icons.Filled.Videocam,
                 contentDescription = "视频",
+                cacheKeyPrefix = "message-video:${message.key}",
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -841,6 +1042,153 @@ private fun rememberHostMessagePreviewView(
 }
 
 @Composable
+private fun AioMediaPreviewSheet(
+    message: AioMessage?,
+    onDismissRequest: () -> Unit
+) {
+    if (message == null || message.renderKind == AioMessageKind.Video) return
+    val media = message.media ?: return
+    val title = "图片"
+    val dismiss = LocalDismissState.current
+
+    WindowBottomSheet(
+        show = true,
+        modifier = Modifier.fillMaxSize(),
+        title = title,
+        insideMargin = DpSize(0.dp, 0.dp),
+        endAction = {
+            IconButton(
+                onClick = { dismiss?.invoke() ?: onDismissRequest() },
+                minWidth = 36.dp,
+                minHeight = 36.dp,
+                cornerRadius = 18.dp,
+                backgroundColor = MiuixTheme.colorScheme.surfaceVariant
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "关闭",
+                    tint = MiuixTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        },
+        onDismissRequest = onDismissRequest
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            AioImagePreviewContent(message = message, media = media)
+        }
+    }
+}
+
+@Composable
+private fun AioImagePreviewContent(message: AioMessage, media: AioMediaSpec) {
+    val source = media.displayPathForImagePreview() ?: return
+    val request = rememberAioImageRequest(source, "preview-image:${message.key}") ?: return
+    val preloadPainter = rememberAsyncImagePainter(model = request)
+    val imageState by preloadPainter.state.collectAsState()
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        when (imageState) {
+            is AsyncImagePainter.State.Success -> {
+                CoilZoomAsyncImage(
+                    model = request,
+                    contentDescription = "图片预览",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            is AsyncImagePainter.State.Error -> {
+                Text(
+                    text = "图片加载失败",
+                    color = Color.White,
+                    fontSize = 13.sp
+                )
+            }
+
+            else -> {
+                InfiniteProgressIndicator(
+                    modifier = Modifier.size(28.dp),
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AioVideoPreviewContent(media: AioMediaSpec) {
+    val source = media.displayPathForPlayback() ?: return
+    val uri = remember(source) { source.toPreviewUri() } ?: return
+    var isPlaying by remember(source) { mutableStateOf(true) }
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    setBackgroundColor(AndroidColor.BLACK)
+                    setVideoURI(uri)
+                    setOnPreparedListener { player ->
+                        player.isLooping = true
+                        if (isPlaying) {
+                            start()
+                        }
+                    }
+                    setOnClickListener {
+                        if (isPlaying) {
+                            pause()
+                            isPlaying = false
+                        } else {
+                            start()
+                            isPlaying = true
+                        }
+                    }
+                }
+            },
+            update = { view ->
+                if (view.tag != uri.toString()) {
+                    view.tag = uri.toString()
+                    view.setVideoURI(uri)
+                }
+                if (isPlaying) {
+                    if (!view.isPlaying) {
+                        view.start()
+                    }
+                } else if (view.isPlaying) {
+                    view.pause()
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        if (!isPlaying) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "播放",
+                    tint = Color.White,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun UnsupportedMessageContent(
     message: AioMessage,
     renderRevision: Long,
@@ -920,10 +1268,42 @@ private fun FileMessageContent(message: AioMessage, contentColor: Color) {
 }
 
 @Composable
+private fun ImagePreviewFrame(
+    message: AioMessage,
+    media: AioMediaSpec?,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(MiuixTheme.colorScheme.secondaryContainer),
+        contentAlignment = Alignment.Center
+    ) {
+        val source = media.displayPathForImagePreview()
+        if (!source.isNullOrBlank()) {
+            AsyncImage(
+                model = rememberAioImageRequest(source, "message-image:${message.key}"),
+                contentDescription = "图片",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Filled.Image,
+                contentDescription = null,
+                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.size(38.dp)
+            )
+        }
+    }
+}
+
+@Composable
 private fun MediaPreviewFrame(
     media: AioMediaSpec?,
     icon: ImageVector,
     contentDescription: String,
+    cacheKeyPrefix: String,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -935,7 +1315,7 @@ private fun MediaPreviewFrame(
         val source = media.displayPathForPreview()
         if (!source.isNullOrBlank()) {
             AsyncImage(
-                model = rememberAioImageRequest(source, contentDescription),
+                model = rememberAioImageRequest(source, cacheKeyPrefix),
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -983,6 +1363,7 @@ private fun AioInputBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MiuixTheme.colorScheme.surface)
+            .imePadding()
             .navigationBarsPadding()
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Bottom
@@ -1040,6 +1421,66 @@ private fun AioInputBar(
 }
 
 @Composable
+private fun AioLongPressMenuPopup(
+    state: AioLongPressMenuState?,
+    onDismissRequest: () -> Unit,
+    onSelectIndex: (Int) -> Unit
+) {
+    if (state == null || state.items.isEmpty()) return
+    val popupPositionProvider = remember(state.anchorX, state.anchorY) {
+        object : top.yukonga.miuix.kmp.basic.PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: androidx.compose.ui.unit.IntRect,
+                windowBounds: androidx.compose.ui.unit.IntRect,
+                layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                popupContentSize: androidx.compose.ui.unit.IntSize,
+                popupMargin: androidx.compose.ui.unit.IntRect,
+                alignment: top.yukonga.miuix.kmp.basic.PopupPositionProvider.Align,
+            ): IntOffset {
+                val rawX = state.anchorX + popupMargin.left
+                val rawY = state.anchorY + popupMargin.top
+                return IntOffset(
+                    x = rawX.coerceIn(
+                        windowBounds.left,
+                        (windowBounds.right - popupContentSize.width - popupMargin.right)
+                            .coerceAtLeast(windowBounds.left)
+                    ),
+                    y = rawY.coerceIn(
+                        (windowBounds.top + popupMargin.top)
+                            .coerceAtMost(windowBounds.bottom - popupContentSize.height - popupMargin.bottom),
+                        windowBounds.bottom - popupContentSize.height - popupMargin.bottom
+                    )
+                )
+            }
+
+            override fun getMargins() =
+                top.yukonga.miuix.kmp.basic.ListPopupDefaults.ContextMenuPositionProvider.getMargins()
+        }
+    }
+    WindowListPopup(
+        show = true,
+        popupPositionProvider = popupPositionProvider,
+        alignment = top.yukonga.miuix.kmp.basic.PopupPositionProvider.Align.TopStart,
+        enableWindowDim = true,
+        onDismissRequest = onDismissRequest
+    ) {
+        ListPopupColumn {
+            state.items.forEachIndexed { index, item ->
+                DropdownImpl(
+                    item = DropdownItem(text = item.label),
+                    optionSize = state.items.size,
+                    isSelected = false,
+                    index = index,
+                    onSelectedIndexChange = {
+                        onSelectIndex(index)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AioEmojiSheet(
     show: Boolean,
     categories: List<AioEmotionCategory>,
@@ -1049,35 +1490,22 @@ private fun AioEmojiSheet(
 ) {
     val density = LocalDensity.current
     val containerSize = LocalWindowInfo.current.containerSize
-    val screenWidth = with(density) { containerSize.width.toDp() }
     val screenHeight = with(density) { containerSize.height.toDp() }
-    val horizontalInset = with(density) { 100f.toDp() }
-    val sheetWidth = (screenWidth - horizontalInset * 2)
-        .coerceAtLeast(240.dp)
-        .coerceAtMost(screenWidth)
+
+    val maxSheetHeight = (screenHeight * 0.82f).coerceAtLeast(320.dp)
+    val maxGridHeight = (maxSheetHeight - 88.dp).coerceAtLeast(160.dp)
 
     WindowBottomSheet(
         show = show,
-        modifier = Modifier
-            .width(sheetWidth)
-            .height(screenHeight),
         title = "表情",
-        insideMargin = DpSize(0.dp, 0.dp),
         enableNestedScroll = true,
         endAction = {
             val dismiss = LocalDismissState.current
-            IconButton(
-                onClick = { dismiss?.invoke() ?: onDismissRequest() },
-                minWidth = 36.dp,
-                minHeight = 36.dp,
-                cornerRadius = 18.dp,
-                backgroundColor = MiuixTheme.colorScheme.surfaceVariant
-            ) {
+            IconButton(onClick = { dismiss?.invoke() }) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "关闭",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
+                    contentDescription = "Confirm",
+                    tint = MiuixTheme.colorScheme.onBackground,
                 )
             }
         },
@@ -1098,7 +1526,8 @@ private fun AioEmojiSheet(
 
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .heightIn(max = maxSheetHeight)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             TabRowWithContour(
@@ -1106,23 +1535,20 @@ private fun AioEmojiSheet(
                 selectedTabIndex = selectedTabIndex,
                 onTabSelected = { selectedTabIndex = it }
             )
-            AnimatedContent(
-                targetState = selectedTabIndex,
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(160)) togetherWith
-                            fadeOut(animationSpec = tween(90))
-                },
-                label = "aioEmojiCategory",
+            val category =
+                visibleCategories.getOrNull(selectedTabIndex) ?: visibleCategories.first()
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .heightIn(min = 120.dp, max = maxGridHeight)
                     .padding(top = 12.dp)
-            ) { tabIndex ->
-                val category = visibleCategories.getOrNull(tabIndex) ?: visibleCategories.first()
+            ) {
                 AioEmojiCategoryGrid(
                     category = category,
                     controller = controller,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = maxGridHeight),
                     onEmotionClick = onEmotionClick
                 )
             }
@@ -1141,7 +1567,8 @@ private fun AioEmojiCategoryGrid(
         AioEmotionSheetState("正在加载表情", loading = true, modifier = modifier)
         return
     }
-    if (category.items.isEmpty()) {
+    val visibleItems = remember(category.items) { category.items.distinctBy { it.key } }
+    if (visibleItems.isEmpty()) {
         AioEmotionSheetState("暂无表情", loading = false, modifier = modifier)
         return
     }
@@ -1156,7 +1583,7 @@ private fun AioEmojiCategoryGrid(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        gridItems(category.items, key = { it.key }) { item ->
+        gridItems(visibleItems, key = { it.key }) { item ->
             AioEmojiCategoryItem(
                 item = item,
                 controller = controller,
@@ -1172,6 +1599,9 @@ private fun AioEmojiCategoryItem(
     controller: AioUiController,
     onClick: () -> Unit
 ) {
+    LaunchedEffect(item.key, item.displayPathForPreview()) {
+        controller.ensureEmotionPreview(item)
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1184,11 +1614,9 @@ private fun AioEmojiCategoryItem(
     ) {
         when {
             item.kind == AioEmotionKind.System -> {
-                AndroidView(
-                    factory = { context ->
-                        controller.createEmotionPreviewView(context, item) ?: ImageView(context)
-                    },
-                    update = { view -> controller.reloadEmotionPreview(view, item) },
+                SystemEmotionPreview(
+                    item = item,
+                    controller = controller,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -1367,7 +1795,7 @@ private fun formatMessageTime(value: Long): String {
 @Composable
 private fun rememberAioImageRequest(value: String, cacheKeyPrefix: String): ImageRequest? {
     val context = LocalContext.current
-    val model = remember(value) { imageModel(value) } ?: return null
+    val model = imageModel(value) ?: return null
     val cacheKey = remember(model, cacheKeyPrefix) { "aio:$cacheKeyPrefix:$model" }
     return remember(context, model, cacheKey) {
         ImageRequest.Builder(context)
@@ -1389,9 +1817,72 @@ private fun imageModel(value: String?): Any? {
     }
 }
 
+@Composable
+private fun SystemEmotionPreview(
+    item: AioEmotionItem,
+    controller: AioUiController,
+    modifier: Modifier = Modifier
+) {
+    val drawable = remember(item.key) { controller.getEmotionPreviewDrawable(item) }
+    val bitmap = remember(drawable) { drawable?.toPreviewBitmap() }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = item.title,
+            contentScale = ContentScale.Fit,
+            modifier = modifier
+        )
+    } else {
+        Text(
+            text = item.title.take(2),
+            color = MiuixTheme.colorScheme.onSurface,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
+private fun String.toPreviewUri(): Uri? {
+    val normalized = trim().takeIf { it.isNotBlank() } ?: return null
+    return when {
+        normalized.startsWith("content://", ignoreCase = true) ||
+                normalized.startsWith("file://", ignoreCase = true) ||
+                normalized.startsWith("http://", ignoreCase = true) ||
+                normalized.startsWith("https://", ignoreCase = true) -> Uri.parse(normalized)
+
+        normalized.startsWith("/") -> Uri.fromFile(File(normalized))
+        else -> Uri.parse(normalized)
+    }
+}
+
 private fun AioMediaSpec?.displayPathForPreview(): String? {
     if (this == null) return null
-    localPath?.trim()?.takeIf(String::isNotBlank)?.let { path ->
+    previewPath.takeUsableMediaPath()?.let { return it }
+    localPath.takeUsableMediaPath()?.let { return it }
+    playbackPath.takeUsableMediaPath()?.let { return it }
+    return normalizeImageUrl(remoteUrl)
+}
+
+private fun AioMediaSpec?.displayPathForImagePreview(): String? {
+    if (this == null) return null
+    playbackPath.takeUsableMediaPath()?.let { return it }
+    localPath.takeUsableMediaPath()?.let { return it }
+    previewPath.takeUsableMediaPath()?.let { return it }
+    remoteUrl.takeUsableRemoteUrl()?.let { return it }
+    return null
+}
+
+private fun AioMediaSpec?.displayPathForPlayback(): String? {
+    if (this == null) return null
+    playbackPath.takeUsableMediaPath()?.let { return it }
+    localPath.takeUsableMediaPath()?.let { return it }
+    previewPath.takeUsableMediaPath()?.let { return it }
+    return normalizeImageUrl(remoteUrl)
+}
+
+private fun String?.takeUsableMediaPath(): String? {
+    this?.trim()?.takeIf(String::isNotBlank)?.let { path ->
         if (!path.startsWith("/") ||
             path.startsWith("file://", ignoreCase = true) ||
             path.startsWith("content://", ignoreCase = true) ||
@@ -1400,7 +1891,7 @@ private fun AioMediaSpec?.displayPathForPreview(): String? {
             return path
         }
     }
-    return normalizeImageUrl(remoteUrl)
+    return null
 }
 
 private fun AioEmotionItem.displayPathForPreview(): String? {
@@ -1413,7 +1904,16 @@ private fun AioEmotionItem.displayPathForPreview(): String? {
             return path
         }
     }
-    return normalizeImageUrl(remoteUrl)
+    resultPath?.trim()?.takeIf(String::isNotBlank)?.let { path ->
+        if (!path.startsWith("/") ||
+            path.startsWith("file://", ignoreCase = true) ||
+            path.startsWith("content://", ignoreCase = true) ||
+            File(path).exists()
+        ) {
+            return path
+        }
+    }
+    return (resultUrl ?: remoteUrl).takeUsableRemoteUrl()
 }
 
 private fun normalizeImageUrl(value: String?): String? {
@@ -1425,6 +1925,23 @@ private fun normalizeImageUrl(value: String?): String? {
         url.startsWith("//") -> "https:$url"
         url.contains('.') && !url.startsWith("/") -> "https://$url"
         else -> url
+    }
+}
+
+private fun Drawable.toPreviewBitmap(): android.graphics.Bitmap? {
+    val width = intrinsicWidth.takeIf { it > 0 } ?: 128
+    val height = intrinsicHeight.takeIf { it > 0 } ?: 128
+    return runCatching { toBitmap(width = width, height = height) }.getOrNull()
+}
+
+private fun String?.takeUsableRemoteUrl(): String? {
+    val url = this?.trim()?.takeIf(String::isNotBlank) ?: return null
+    return when {
+        url.startsWith("http://", ignoreCase = true) ||
+                url.startsWith("https://", ignoreCase = true) -> url
+
+        url.startsWith("//") -> "https:$url"
+        else -> null
     }
 }
 

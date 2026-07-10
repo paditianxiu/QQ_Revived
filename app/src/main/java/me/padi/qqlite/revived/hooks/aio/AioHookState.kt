@@ -16,6 +16,7 @@ import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
 import me.padi.qqlite.revived.shared.model.aio.AioMediaSpec
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
+import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
@@ -25,6 +26,8 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import java.text.DateFormat
+import java.util.Date
 
 internal data class AioHookState(
     val classLoader: ClassLoader,
@@ -40,6 +43,9 @@ internal data class AioHookState(
     val aioMsgViewHolderClass: Class<*>,
     val iMsgItemClass: Class<*>,
     val watchMsgItemClass: Class<*>,
+    val nickNameAbilityClass: Class<*>?,
+    val nickNameAbilityInjectMethod: Method?,
+    val nickNameAbilityMemberInfoCacheField: Field?,
     val watchMsgListRepoClass: Class<*>?,
     val watchAioListVbClass: Class<*>?,
     val watchAioListCreateViewMethod: Method?,
@@ -50,6 +56,10 @@ internal data class AioHookState(
     val inputBarIntentDispatchMethod: Method?,
     val watchAioListVmClass: Class<*>?,
     val watchAioListVmSendElementsMethod: Method?,
+    val kernelGroupServiceUtilCompanion: Any?,
+    val kernelGroupServiceGetterMethod: Method?,
+    val groupMemberListCallbackClass: Class<*>?,
+    val groupMemberListResultInfosField: Field?,
     val imeTextUtilCompanion: Any?,
     val imeTextToElementsMethod: Method?,
     val repoConstructor: Constructor<*>?,
@@ -74,7 +84,23 @@ internal data class AioHookState(
     val msgTypeGetter: Method,
     val senderUidGetter: Method,
     val senderUinGetter: Method,
+    val sendNickNameGetter: Method?,
+    val sendMemberNameGetter: Method?,
+    val fromGuildRoleInfoGetter: Method?,
+    val fromChannelRoleInfoGetter: Method?,
+    val levelRoleInfoGetter: Method?,
     val elementsGetter: Method,
+    val watchMsgShowNickNameField: Field?,
+    val watchMsgShowTimeStampFlagField: Field?,
+    val watchMsgMemberInfoField: Field?,
+    val memberInfoCardNameGetter: Method?,
+    val memberInfoRemarkGetter: Method?,
+    val memberInfoNickGetter: Method?,
+    val memberInfoSpecialTitleGetter: Method?,
+    val memberInfoRoleGetter: Method?,
+    val memberInfoLevelGetter: Method?,
+    val fromRoleInfoNameGetter: Method?,
+    val fromRoleInfoColorGetter: Method?,
     val elementTypeGetter: Method,
     val textElementGetter: Method,
     val picElementGetter: Method,
@@ -169,6 +195,9 @@ internal data class AioHookState(
             val senderUid = senderUidGetter.invokeString(msgRecord).orEmpty()
             val senderUin = senderUinGetter.invokeLong(msgRecord)
             val isSelf = isSelfMethod.invoke(data) as? Boolean == true
+            val senderName = readSenderName(data, msgRecord, senderUid)
+            val badges = readSenderBadges(data, msgRecord)
+            val showTimeDivider = readShowTimeDivider(data)
             val parsed = parseElements(msgRecord)
             val rawKind = parsed.rawKind.takeIf { it != AioMessageKind.Unsupported }
                 ?: AioMessageKind.fromMsgType(msgType)
@@ -193,6 +222,10 @@ internal data class AioHookState(
                 text = (hostTipText ?: parsed.text).ifBlank {
                     defaultMessageText(parsed.renderKind, rawKind, msgType)
                 },
+                senderName = senderName,
+                badges = badges,
+                showTimeDivider = showTimeDivider,
+                timeDividerText = formatTimeDividerText(msgTime),
                 media = parsed.media,
                 avatar = senderAvatar(senderUid, senderUin, hostFragment),
                 itemViewRef = itemView?.let { WeakReference(it) }
@@ -236,6 +269,44 @@ internal data class AioHookState(
     fun requestLoadOlderMessages(repo: Any) {
         if (!isWatchMsgListRepo(repo)) return
         repoLoadOlderMethod?.invoke(repo)
+    }
+
+    fun requestGroupMemberInfo(
+        groupCode: Long,
+        uids: Collection<String>,
+        onLoaded: (Map<String, Any>) -> Unit
+    ): Boolean {
+        if (groupCode <= 0L || uids.isEmpty()) return false
+        val groupService = kernelGroupServiceGetterMethod?.invoke(kernelGroupServiceUtilCompanion)
+            ?: return false
+        val callbackClass = groupMemberListCallbackClass ?: return false
+        val infosField = groupMemberListResultInfosField ?: return false
+        val callback = Proxy.newProxyInstance(
+            classLoader,
+            arrayOf(callbackClass)
+        ) { _, method, args ->
+            if (method.name == "onResult") {
+                val resultCode = (args?.getOrNull(0) as? Number)?.toInt() ?: -1
+                val result = args?.getOrNull(2)
+                if (resultCode == 0 && result != null) {
+                    @Suppress("UNCHECKED_CAST")
+                    val infos = (infosField.get(result) as? Map<String, Any>).orEmpty()
+                    if (infos.isNotEmpty()) {
+                        AioRuntimeStore.mainHandler.post { onLoaded(infos) }
+                    }
+                }
+            }
+            defaultInvocationReturn(method.returnType)
+        }
+        val uidList = ArrayList(uids.filter { it.isNotBlank() }.distinct())
+        if (uidList.isEmpty()) return false
+        val fetchMethod = groupService.javaClass.methods.firstOrNull { method ->
+            method.name == "n" && method.parameterTypes.size == 5
+        } ?: return false
+        return runCatching {
+            fetchMethod.invoke(groupService, groupCode, uidList, false, "", callback)
+            true
+        }.getOrDefault(false)
     }
 
     fun createAvatarView(context: Context, spec: AvatarSpec?): View {
@@ -425,6 +496,31 @@ internal data class AioHookState(
         view.setImageDrawable(loadSystemEmotionDrawable(item))
     }
 
+    fun getEmotionPreviewDrawable(item: AioEmotionItem): Drawable? {
+        if (item.kind != AioEmotionKind.System) return null
+        return loadSystemEmotionDrawable(item)
+    }
+
+    fun ensureEmotionPreview(item: AioEmotionItem, onLoaded: (AioEmotionItem) -> Unit) {
+        if (item.kind != AioEmotionKind.Favorite && item.kind != AioEmotionKind.Hot) return
+        val localPath = item.resultPath?.takeIf { it.isNotBlank() && File(it).isFile }
+            ?: item.localPath?.takeIf { it.isNotBlank() && File(it).isFile }
+        if (localPath != null) {
+            onLoaded(item.copy(localPath = localPath, resultPath = localPath))
+            return
+        }
+        val url = item.resultUrl?.takeIf { it.isNotBlank() } ?: item.remoteUrl?.takeIf { it.isNotBlank() }
+        val resId = item.resultResId?.takeIf { it.isNotBlank() }
+        val md5 = item.resultMd5?.takeIf { it.isNotBlank() }
+        if (url == null || resId == null || md5 == null) return
+        downloadRemoteEmotionPath(url, resId, md5) { path ->
+            if (path.isBlank()) return@downloadRemoteEmotionPath
+            AioRuntimeStore.mainHandler.post {
+                onLoaded(item.copy(localPath = path, resultPath = path))
+            }
+        }
+    }
+
     fun sendEmotion(listVb: Any?, fragment: Any?, item: AioEmotionItem): Boolean {
         if (sendEmotionWithHostVm(listVb, item)) {
             return true
@@ -583,63 +679,71 @@ internal data class AioHookState(
         md5: String
     ): Boolean {
         return runCatching {
-            val listenerClass = classLoader.findOptionalClass(I_KERNEL_MSG_LISTENER_CLASS)
-                ?: return@runCatching false
-            val paramsClass = classLoader.findOptionalClass(GPRO_EMOJI_DOWNLOAD_PARAMS_CLASS)
-                ?: return@runCatching false
-            val params = paramsClass.getDeclaredConstructor(
-                String::class.java,
-                String::class.java,
-                String::class.java
-            ).apply { isAccessible = true }
-                .newInstance(url, resId, md5)
-            Thread({
-                runCatching {
-                    val msgService = findMsgService(waitRuntime = true)
-                    if (msgService == null) {
-                        return@runCatching
-                    }
-                    var listener: Any? = null
-                    listener = Proxy.newProxyInstance(
-                        classLoader,
-                        arrayOf(listenerClass)
-                    ) { _, method, args ->
-                        if (method.name == "onEmojiDownloadComplete") {
-                            unregisterKernelMsgListener(msgService, listenerClass, listener)
-                            val path = args?.firstOrNull()
-                                ?.findFieldValue("path")
-                                ?.toString()
-                                .orEmpty()
-                            if (path.isNotBlank()) {
-                                AioRuntimeStore.mainHandler.post {
-                                    sendPictureEmotionPath(hostVm, path)
-                                }
-                            }
-                        }
-                        defaultInvocationReturn(method.returnType)
-                    }
-                    if (!registerKernelMsgListener(msgService, listenerClass, listener)) {
-                        return@runCatching
-                    }
-                    val paramsList = java.util.ArrayList<Any>(1).apply { add(params) }
-                    val downloadMethod = msgService.javaClass.methods.firstOrNull { method ->
-                        method.name == "downloadEmojiPic" &&
-                            method.parameterTypes.size == 4
-                    }
-                    if (downloadMethod == null) {
-                        unregisterKernelMsgListener(msgService, listenerClass, listener)
-                        return@runCatching
-                    }
-                    runCatching {
-                        downloadMethod.invoke(msgService, 1, paramsList, 0, HashMap<Any, Any>())
-                    }.onFailure {
-                        unregisterKernelMsgListener(msgService, listenerClass, listener)
-                        throw it
+            downloadRemoteEmotionPath(url, resId, md5) { path ->
+                if (path.isNotBlank()) {
+                    AioRuntimeStore.mainHandler.post {
+                        sendPictureEmotionPath(hostVm, path)
                     }
                 }
-            }, "QQR-EmotionDownload").start()
+            }
             true
         }.getOrDefault(false)
+    }
+
+    private fun downloadRemoteEmotionPath(
+        url: String,
+        resId: String,
+        md5: String,
+        onLoaded: (String) -> Unit
+    ) {
+        val listenerClass = classLoader.findOptionalClass(I_KERNEL_MSG_LISTENER_CLASS) ?: return
+        val paramsClass = classLoader.findOptionalClass(GPRO_EMOJI_DOWNLOAD_PARAMS_CLASS) ?: return
+        val params = paramsClass.getDeclaredConstructor(
+            String::class.java,
+            String::class.java,
+            String::class.java
+        ).apply { isAccessible = true }
+            .newInstance(url, resId, md5)
+        Thread({
+            runCatching {
+                val msgService = findMsgService(waitRuntime = true) ?: return@runCatching
+                var listener: Any? = null
+                listener = Proxy.newProxyInstance(
+                    classLoader,
+                    arrayOf(listenerClass)
+                ) { _, method, args ->
+                    if (method.name == "onEmojiDownloadComplete") {
+                        unregisterKernelMsgListener(msgService, listenerClass, listener)
+                        val path = args?.firstOrNull()
+                            ?.findFieldValue("path")
+                            ?.toString()
+                            .orEmpty()
+                        if (path.isNotBlank()) {
+                            onLoaded(path)
+                        }
+                    }
+                    defaultInvocationReturn(method.returnType)
+                }
+                if (!registerKernelMsgListener(msgService, listenerClass, listener)) {
+                    return@runCatching
+                }
+                val paramsList = java.util.ArrayList<Any>(1).apply { add(params) }
+                val downloadMethod = msgService.javaClass.methods.firstOrNull { method ->
+                    method.name == "downloadEmojiPic" &&
+                        method.parameterTypes.size == 4
+                }
+                if (downloadMethod == null) {
+                    unregisterKernelMsgListener(msgService, listenerClass, listener)
+                    return@runCatching
+                }
+                runCatching {
+                    downloadMethod.invoke(msgService, 1, paramsList, 0, HashMap<Any, Any>())
+                }.onFailure {
+                    unregisterKernelMsgListener(msgService, listenerClass, listener)
+                    throw it
+                }
+            }
+        }, "QQR-EmotionDownload").start()
     }
 
     private fun sendMarketEmotion(hostVm: Any, item: AioEmotionItem): Boolean {
@@ -780,7 +884,7 @@ internal data class AioHookState(
                     systemCode = code,
                     systemType = type
                 )
-            }
+            }.distinctBy { item -> item.key }
         }.getOrDefault(emptyList())
     }
 
@@ -887,6 +991,7 @@ internal data class AioHookState(
 
     fun trySendText(root: View?, listVb: Any?, inputBarController: Any?, text: String): Boolean {
         if (sendTextWithHostVm(listVb, text)) {
+            root?.clearHostDraftText()
             return true
         }
         val editText = root?.findFirstEditText()
@@ -897,6 +1002,7 @@ internal data class AioHookState(
         }
         val sendView = root?.findHostActionView("发送", "send")
         if (sendView?.performClick() == true) {
+            root.clearHostDraftText()
             return true
         }
         return false
@@ -996,7 +1102,7 @@ internal data class AioHookState(
     private fun parsePic(pic: Any): AioMediaSpec {
         val sourcePath = watchPicOriginPathMethod?.invokeStringOrNull(null, pic)
             ?: picSourcePathGetter.invokeString(pic)?.takeIf { it.isNotBlank() }
-        val thumbPath = preferredLocalPath(
+        val thumbPath = firstCandidatePath(
             watchPicThumbPathMethod?.invokeStringOrNull(null, pic, PIC_THUMB_SIZE_SMALL),
             watchPicThumbPathMethod?.invokeStringOrNull(null, pic, PIC_THUMB_SIZE_ORIGIN),
             watchPicThumbPathMethod?.invokeStringOrNull(null, pic, PIC_THUMB_SIZE_LARGE),
@@ -1004,8 +1110,10 @@ internal data class AioHookState(
         )
         val originUrl = picOriginUrlGetter.invokeString(pic)?.takeIf { it.isNotBlank() }
         return AioMediaSpec(
-            localPath = preferredLocalPath(thumbPath, sourcePath),
+            localPath = firstCandidatePath(sourcePath, thumbPath),
             remoteUrl = normalizeRemoteUrl(originUrl),
+            previewPath = firstCandidatePath(thumbPath, sourcePath),
+            playbackPath = firstCandidatePath(sourcePath, thumbPath),
             width = picWidthGetter.invokeInt(pic),
             height = picHeightGetter.invokeInt(pic),
             fileName = picFileNameGetter.invokeString(pic)
@@ -1013,10 +1121,12 @@ internal data class AioHookState(
     }
 
     private fun parseVideo(video: Any): AioMediaSpec {
-        val thumbPath = videoThumbPathGetter.invokeMapPath(video)
+        val thumbPath = firstCandidatePath(videoThumbPathGetter.invokeMapPath(video))
         val filePath = videoFilePathGetter.invokeString(video)?.takeIf { it.isNotBlank() }
         return AioMediaSpec(
-            localPath = preferredLocalPath(thumbPath, filePath),
+            localPath = firstCandidatePath(filePath, thumbPath),
+            previewPath = firstCandidatePath(thumbPath, filePath),
+            playbackPath = firstCandidatePath(filePath, thumbPath),
             width = videoThumbWidthGetter.invokeInt(video),
             height = videoThumbHeightGetter.invokeInt(video),
             durationSeconds = videoFileTimeGetter.invokeInt(video),
@@ -1061,6 +1171,12 @@ internal data class AioHookState(
             }
     }
 
+    private fun firstCandidatePath(vararg values: String?): String? {
+        return values
+            .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
+            .firstOrNull()
+    }
+
     private fun normalizeRemoteUrl(value: String?): String? {
         val url = value?.trim()?.takeIf(String::isNotBlank) ?: return null
         return when {
@@ -1079,6 +1195,123 @@ internal data class AioHookState(
                     ?.toString()
                     ?.takeIf { it.isNotBlank() }
             }
+    }
+
+    private fun readSenderName(data: Any, msgRecord: Any, senderUid: String): String {
+        val hostName = (watchMsgShowNickNameField?.get(data) as? CharSequence)
+            ?.toString()
+            ?.takeIf { it.isNotBlank() }
+        if (hostName != null) return hostName
+        readMemberInfoDisplayName(resolveMemberInfo(data, senderUid))?.let { return it }
+        val memberName = sendMemberNameGetter?.invokeString(msgRecord)?.takeIf { it.isNotBlank() }
+        if (memberName != null) return memberName
+        val nickName = sendNickNameGetter?.invokeString(msgRecord)?.takeIf { it.isNotBlank() }
+        if (nickName != null) return nickName
+        return senderUid
+    }
+
+    private fun readSenderBadges(data: Any, msgRecord: Any): List<AioMessageBadge> {
+        val senderUid = senderUidGetter.invokeString(msgRecord).orEmpty()
+        val memberInfo = resolveMemberInfo(data, senderUid)
+        buildMemberInfoBadge(memberInfo)?.let { return listOf(it) }
+
+        val badges = linkedSetOf<AioMessageBadge>()
+        addRoleBadge(badges, fromGuildRoleInfoGetter?.invokeAny(msgRecord))
+        addRoleBadge(badges, fromChannelRoleInfoGetter?.invokeAny(msgRecord))
+        addRoleBadge(badges, levelRoleInfoGetter?.invokeAny(msgRecord))
+        if (badges.isNotEmpty()) return badges.toList()
+
+        addFallbackRoleBadge(badges, memberInfo)
+        return badges.toList()
+    }
+
+    private fun resolveMemberInfo(data: Any, senderUid: String): Any? {
+        return watchMsgMemberInfoField?.get(data)
+            ?: AioRuntimeStore.findMemberInfo(senderUid)
+    }
+
+    private fun readMemberInfoDisplayName(memberInfo: Any?): String? {
+        if (memberInfo == null) return null
+        val cardName = memberInfoCardNameGetter?.invokeString(memberInfo)?.trim().orEmpty()
+        if (cardName.isNotEmpty()) return cardName
+        val remark = memberInfoRemarkGetter?.invokeString(memberInfo)?.trim().orEmpty()
+        if (remark.isNotEmpty()) return remark
+        return memberInfoNickGetter?.invokeString(memberInfo)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun buildMemberInfoBadge(memberInfo: Any?): AioMessageBadge? {
+        if (memberInfo == null) return null
+        val roleValue = memberInfoRoleGetter?.invokeAny(memberInfo)
+        val specialTitle = memberInfoSpecialTitleGetter?.invokeString(memberInfo)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        val memberLevel = memberInfoLevelGetter?.invokeInt(memberInfo) ?: 0
+        val type = when {
+            roleValue.isOwnerRole() -> BadgeType.Owner
+            roleValue.isAdminRole() -> BadgeType.Admin
+            specialTitle != null -> BadgeType.Special
+            else -> BadgeType.Normal
+        }
+        val text = buildString {
+            append("LV")
+            append(memberLevel.coerceAtLeast(0))
+            when {
+                specialTitle != null -> {
+                    append(" ")
+                    append(specialTitle)
+                }
+
+                type == BadgeType.Owner -> append(" 群主")
+                type == BadgeType.Admin -> append(" 管理员")
+            }
+        }
+        val colors = type.colors()
+        return AioMessageBadge(
+            text = text,
+            colorArgb = colors.textColor,
+            backgroundColorArgb = colors.backgroundColor
+        )
+    }
+
+    private fun addRoleBadge(target: MutableSet<AioMessageBadge>, roleInfo: Any?) {
+        if (roleInfo == null) return
+        val text = fromRoleInfoNameGetter?.invokeString(roleInfo)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        val color = (fromRoleInfoColorGetter?.invokeAny(roleInfo) as? Number)?.toInt()
+        target += AioMessageBadge(text = text, colorArgb = color)
+    }
+
+    private fun addFallbackRoleBadge(target: MutableSet<AioMessageBadge>, memberInfo: Any?) {
+        if (memberInfo == null) return
+        if (target.any { it.text == "群主" || it.text == "管理员" }) return
+        val roleValue = memberInfoRoleGetter?.invokeAny(memberInfo)
+        when {
+            roleValue.isOwnerRole() -> {
+                target += AioMessageBadge(
+                    text = "群主",
+                    colorArgb = COLOR_OWNER_TEXT,
+                    backgroundColorArgb = COLOR_OWNER_BG
+                )
+            }
+
+            roleValue.isAdminRole() -> {
+                target += AioMessageBadge(
+                    text = "管理员",
+                    colorArgb = COLOR_ADMIN_TEXT,
+                    backgroundColorArgb = COLOR_ADMIN_BG
+                )
+            }
+        }
+    }
+
+    private fun readShowTimeDivider(data: Any): Boolean {
+        return (watchMsgShowTimeStampFlagField?.get(data) as? Boolean) == true
+    }
+
+    private fun formatTimeDividerText(msgTime: Long): String {
+        return formatMessageClock(msgTime)
     }
 
     private fun buildMessageKey(
@@ -1104,7 +1337,8 @@ internal data class AioHookState(
             AioMessageKind.File -> "文件"
             AioMessageKind.Tip -> "系统提示"
             AioMessageKind.Text -> ""
-            else -> "[${rawKind.takeIf { it != AioMessageKind.Unsupported }?.displayName}]"
+            else -> rawKind.takeIf { it != AioMessageKind.Unsupported }
+                ?.let { "[${it.displayName}]" }
                 ?: "暂不支持的消息类型 $msgType"
         }
     }
@@ -1120,6 +1354,19 @@ internal data class AioHookState(
             }
         }
         return target
+    }
+
+    private fun formatMessageClock(value: Long): String {
+        if (value <= 0L) return ""
+        val millis = if (value > 100_000_000_000L) value else value * 1000L
+        return DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(millis))
+    }
+
+    private fun View.clearHostDraftText() {
+        findFirstEditText()?.let { editText ->
+            editText.text?.clear()
+            editText.setText("")
+        }
     }
 
     private fun View.findHostActionView(vararg tokens: String): View? {
@@ -1191,6 +1438,23 @@ internal data class AioHookState(
             "com.tencent.qqnt.watch.emotion.recentuse.RecentUseDataSource"
         private const val MSG_UTIL_CLASS = "com.tencent.watch.aio_impl.ext.MsgUtil"
         private const val MARKET_EMOTION_SEND_RUNNABLE_CLASS = "d.c.q.a.a.e.f"
+        private const val MEMBER_INFO_CLASS = "com.tencent.qqnt.kernel.nativeinterface.MemberInfo"
+        private const val FROM_ROLE_INFO_CLASS = "com.tencent.qqnt.kernel.nativeinterface.FromRoleInfo"
+        private const val NICK_NAME_ABILITY_CLASS =
+            "com.tencent.watch.aio_impl.coreImpl.repo.NickNameAbility"
+        private const val KERNEL_SERVICE_UTIL_CLASS = "com.tencent.qqnt.msg.KernelServiceUtil"
+        private const val GROUP_MEMBER_LIST_CALLBACK_CLASS =
+            "com.tencent.qqnt.kernel.nativeinterface.IGroupMemberListCallback"
+        private const val GROUP_MEMBER_LIST_RESULT_CLASS =
+            "com.tencent.qqnt.kernel.nativeinterface.GroupMemberListResult"
+        private const val COLOR_SPECIAL_BG = 0xFF30263F.toInt()
+        private const val COLOR_SPECIAL_TEXT = 0xFFBB87F7.toInt()
+        private const val COLOR_NORMAL_BG = 0xFF2E2E2E.toInt()
+        private const val COLOR_NORMAL_TEXT = 0xFF9E9E9E.toInt()
+        private const val COLOR_ADMIN_BG = 0xFF0E2D41.toInt()
+        private const val COLOR_ADMIN_TEXT = 0xFF0088EE.toInt()
+        private const val COLOR_OWNER_BG = 0xFF412917.toInt()
+        private const val COLOR_OWNER_TEXT = 0xFFFF8D40.toInt()
 
         fun create(classLoader: ClassLoader): AioHookState {
             val watchAIOFragmentClass = classLoader.findTargetClass(WATCH_AIO_FRAGMENT_CLASS)
@@ -1202,6 +1466,15 @@ internal data class AioHookState(
             val aioMsgViewHolderClass = classLoader.findTargetClass(AIO_MSG_VIEW_HOLDER_CLASS)
             val iMsgItemClass = classLoader.findTargetClass(I_MSG_ITEM_CLASS)
             val watchMsgItemClass = classLoader.findTargetClass(WATCH_AIO_MSG_ITEM_CLASS)
+            val nickNameAbilityClass = classLoader.findOptionalClass(NICK_NAME_ABILITY_CLASS)
+            val nickNameAbilityMemberInfoCacheField = nickNameAbilityClass?.let {
+                findOptionalField(it, "memberInfoCache")
+            }
+            val kernelServiceUtilClass = classLoader.findOptionalClass(KERNEL_SERVICE_UTIL_CLASS)
+            val groupMemberListCallbackClass =
+                classLoader.findOptionalClass(GROUP_MEMBER_LIST_CALLBACK_CLASS)
+            val groupMemberListResultClass =
+                classLoader.findOptionalClass(GROUP_MEMBER_LIST_RESULT_CLASS)
             val watchMsgListRepoClass = classLoader.findOptionalClass(WATCH_MSG_LIST_REPO_CLASS)
             val watchAioListVbClass = classLoader.findOptionalClass(WATCH_AIO_LIST_VB_CLASS)
             val watchAioListVmClass = classLoader.findOptionalClass(WATCH_AIO_LIST_VM_CLASS)
@@ -1221,6 +1494,8 @@ internal data class AioHookState(
             val videoElementClass = classLoader.findTargetClass(VIDEO_ELEMENT_CLASS)
             val pttElementClass = classLoader.findTargetClass(PTT_ELEMENT_CLASS)
             val fileElementClass = classLoader.findTargetClass(FILE_ELEMENT_CLASS)
+            val memberInfoClass = classLoader.findOptionalClass(MEMBER_INFO_CLASS)
+            val fromRoleInfoClass = classLoader.findOptionalClass(FROM_ROLE_INFO_CLASS)
             val watchAvatarViewClass = classLoader.findOptionalClass(WATCH_AVATAR_VIEW_CLASS)
             val avatarFacadeClass = classLoader.findOptionalClass(AVATAR_FACADE_CLASS)
             val avatarTargetClass = classLoader.findOptionalClass(I_AVATAR_TARGET_CLASS)
@@ -1252,6 +1527,9 @@ internal data class AioHookState(
                 aioMsgViewHolderClass = aioMsgViewHolderClass,
                 iMsgItemClass = iMsgItemClass,
                 watchMsgItemClass = watchMsgItemClass,
+                nickNameAbilityClass = nickNameAbilityClass,
+                nickNameAbilityInjectMethod = nickNameAbilityClass?.optionalMethod("a", List::class.java),
+                nickNameAbilityMemberInfoCacheField = nickNameAbilityMemberInfoCacheField,
                 watchMsgListRepoClass = watchMsgListRepoClass,
                 watchAioListVbClass = watchAioListVbClass,
                 watchAioListCreateViewMethod = watchAioListVbClass?.declaredMethods
@@ -1281,6 +1559,14 @@ internal data class AioHookState(
                 watchAioListVmClass = watchAioListVmClass,
                 watchAioListVmSendElementsMethod = watchAioListVmClass
                     ?.optionalMethod("J", java.util.ArrayList::class.java),
+                kernelGroupServiceUtilCompanion = kernelServiceUtilClass,
+                kernelGroupServiceGetterMethod = kernelServiceUtilClass?.methods?.firstOrNull {
+                    it.name == "c" && it.parameterTypes.isEmpty()
+                }?.apply { isAccessible = true },
+                groupMemberListCallbackClass = groupMemberListCallbackClass,
+                groupMemberListResultInfosField = groupMemberListResultClass?.let {
+                    findOptionalField(it, "infos")
+                },
                 imeTextUtilCompanion = imeTextUtilCompanion,
                 imeTextToElementsMethod = imeTextUtilCompanion?.javaClass?.declaredMethods
                     ?.firstOrNull { method ->
@@ -1324,7 +1610,23 @@ internal data class AioHookState(
                 msgTypeGetter = msgRecordClass.requiredMethod("getMsgType"),
                 senderUidGetter = msgRecordClass.requiredMethod("getSenderUid"),
                 senderUinGetter = msgRecordClass.requiredMethod("getSenderUin"),
+                sendNickNameGetter = msgRecordClass.optionalMethod("getSendNickName"),
+                sendMemberNameGetter = msgRecordClass.optionalMethod("getSendMemberName"),
+                fromGuildRoleInfoGetter = msgRecordClass.optionalMethod("getFromGuildRoleInfo"),
+                fromChannelRoleInfoGetter = msgRecordClass.optionalMethod("getFromChannelRoleInfo"),
+                levelRoleInfoGetter = msgRecordClass.optionalMethod("getLevelRoleInfo"),
                 elementsGetter = msgRecordClass.requiredMethod("getElements"),
+                watchMsgShowNickNameField = findOptionalField(watchMsgItemClass, "showNickName"),
+                watchMsgShowTimeStampFlagField = findOptionalField(watchMsgItemClass, "showTimeStampFlag"),
+                watchMsgMemberInfoField = findOptionalField(watchMsgItemClass, "memberInfo"),
+                memberInfoCardNameGetter = memberInfoClass?.optionalMethod("getCardName"),
+                memberInfoRemarkGetter = memberInfoClass?.optionalMethod("getRemark"),
+                memberInfoNickGetter = memberInfoClass?.optionalMethod("getNick"),
+                memberInfoSpecialTitleGetter = memberInfoClass?.optionalMethod("getMemberSpecialTitle"),
+                memberInfoRoleGetter = memberInfoClass?.optionalMethod("getRole"),
+                memberInfoLevelGetter = memberInfoClass?.optionalMethod("getMemberLevel"),
+                fromRoleInfoNameGetter = fromRoleInfoClass?.optionalMethod("getName"),
+                fromRoleInfoColorGetter = fromRoleInfoClass?.optionalMethod("getColor"),
                 elementTypeGetter = msgElementClass.requiredMethod("getElementType"),
                 textElementGetter = msgElementClass.requiredMethod("getTextElement"),
                 picElementGetter = msgElementClass.requiredMethod("getPicElement"),
@@ -1461,4 +1763,41 @@ private fun Any?.invokeFunction0(): Boolean {
         }?.invoke(this) ?: return false
         true
     }.getOrDefault(false)
+}
+
+private fun Any?.isOwnerRole(): Boolean {
+    return when (this) {
+        is Number -> toInt() == 2
+        is Enum<*> -> name.contains("OWNER", ignoreCase = true)
+        else -> toString().contains("owner", ignoreCase = true) || toString().contains("群主")
+    }
+}
+
+private fun Any?.isAdminRole(): Boolean {
+    return when (this) {
+        is Number -> toInt() == 1
+        is Enum<*> -> name.contains("ADMIN", ignoreCase = true)
+        else -> toString().contains("admin", ignoreCase = true) || toString().contains("管理员")
+    }
+}
+
+private enum class BadgeType {
+    Owner,
+    Admin,
+    Special,
+    Normal
+}
+
+private data class BadgeColors(
+    val backgroundColor: Int,
+    val textColor: Int
+)
+
+private fun BadgeType.colors(): BadgeColors {
+    return when (this) {
+        BadgeType.Owner -> BadgeColors(0xFF412917.toInt(), 0xFFFF8D40.toInt())
+        BadgeType.Admin -> BadgeColors(0xFF0E2D41.toInt(), 0xFF0088EE.toInt())
+        BadgeType.Special -> BadgeColors(0xFF30263F.toInt(), 0xFFBB87F7.toInt())
+        BadgeType.Normal -> BadgeColors(0xFF2E2E2E.toInt(), 0xFF9E9E9E.toInt())
+    }
 }

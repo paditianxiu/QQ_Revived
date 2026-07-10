@@ -20,6 +20,7 @@ internal object AioComposeHook : BaseHook() {
     private var listUiHookInstalled = false
     private var repoHookInstalled = false
     private var watchAioListVbHookInstalled = false
+    private var nickNameAbilityHookInstalled = false
     private var hookState: AioHookState? = null
 
     override fun reset() {
@@ -28,6 +29,7 @@ internal object AioComposeHook : BaseHook() {
         listUiHookInstalled = false
         repoHookInstalled = false
         watchAioListVbHookInstalled = false
+        nickNameAbilityHookInstalled = false
         hookState = null
         AioRuntimeStore.reset()
     }
@@ -40,6 +42,7 @@ internal object AioComposeHook : BaseHook() {
         hookListUiOperation(module, state)
         hookMsgListRepo(module, state)
         hookWatchAioListVb(module, state)
+        hookNickNameAbility(module, state)
     }
 
     private fun hookFragment(module: ModuleMainKt, state: AioHookState) {
@@ -290,6 +293,35 @@ internal object AioComposeHook : BaseHook() {
         }
     }
 
+    private fun hookNickNameAbility(module: ModuleMainKt, state: AioHookState) {
+        if (nickNameAbilityHookInstalled) return
+        val method = state.nickNameAbilityInjectMethod ?: return
+
+        runCatching {
+            module.intercept(method) {
+                val rows = (args.getOrNull(0) as? Iterable<*>)?.toList()
+                AioRuntimeStore.rememberNickNameAbility(
+                    thisObject,
+                    state.nickNameAbilityMemberInfoCacheField
+                )
+                val result = proceed()
+                AioRuntimeStore.rememberNickNameAbility(
+                    thisObject,
+                    state.nickNameAbilityMemberInfoCacheField
+                )
+                val binding = AioRuntimeStore.latestBinding?.get()
+                if (binding != null && !rows.isNullOrEmpty()) {
+                    binding.upsertMessagesFromHost(rows)
+                }
+                result
+            }
+            nickNameAbilityHookInstalled = true
+            module.logHook(Log.INFO, "AIO NickNameAbility hook installed")
+        }.onFailure {
+            module.logHook(Log.WARN, "AIO NickNameAbility hook skipped", it)
+        }
+    }
+
     private fun scheduleListUiSync(
         module: ModuleMainKt,
         state: AioHookState,
@@ -318,7 +350,11 @@ internal object AioComposeHook : BaseHook() {
                 ?: AioRuntimeStore.latestBinding?.get()
                 ?: return@runCatching
             binding.attachHostListView(listView)
-            binding.replaceMessagesFromHost(rows)
+            if (binding.currentState.messages.isEmpty()) {
+                binding.replaceMessagesFromHost(rows)
+            } else {
+                binding.upsertMessagesFromHost(rows)
+            }
         }.onFailure {
             module.logHook(Log.WARN, "AIO compose list UI sync skipped", it)
         }

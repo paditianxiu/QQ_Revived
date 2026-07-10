@@ -1,17 +1,18 @@
 package me.padi.qqlite.revived.hooks.common
 
 import android.app.Activity
-import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.ImageView
+import androidx.core.graphics.toColorInt
 import me.padi.qqlite.revived.ModuleMainKt
 
 internal object WatchUiHook : BaseHook() {
     private const val WATCH_FRAGMENT_CLASS = "com.tencent.qqnt.watch.ui.kit.WatchFragment"
     private const val WATCH_FRAGMENT_BACKGROUND_FIELD = "d"
+    private const val FALLBACK_FOREGROUND_COLOR = 0xFF1F2937.toInt()
     private var installed = false
 
     override fun reset() {
@@ -43,9 +44,9 @@ internal object WatchUiHook : BaseHook() {
 
         runCatching {
             val watchFragmentClass = targetClassLoader.findTargetClass(WATCH_FRAGMENT_CLASS)
-            val backgroundField = watchFragmentClass
-                .getDeclaredField(WATCH_FRAGMENT_BACKGROUND_FIELD)
-                .apply { isAccessible = true }
+            val backgroundField =
+                watchFragmentClass.getDeclaredField(WATCH_FRAGMENT_BACKGROUND_FIELD)
+                    .apply { isAccessible = true }
             module.intercept(
                 watchFragmentClass.getDeclaredMethod(
                     "onCreateView",
@@ -57,8 +58,9 @@ internal object WatchUiHook : BaseHook() {
                 val result = proceed()
                 runCatching {
                     val fragment = thisObject ?: return@runCatching
-                    val imageView = backgroundField.get(fragment) as? ImageView ?: return@runCatching
-                    imageView.setColorFilter(Color.WHITE)
+                    val imageView =
+                        backgroundField.get(fragment) as? ImageView ?: return@runCatching
+                    imageView.setColorFilter("#F7F7F7".toColorInt())
                 }.onFailure {
                     module.logHook(Log.WARN, "WatchFragment background image tint failed", it)
                 }
@@ -70,4 +72,6 @@ internal object WatchUiHook : BaseHook() {
         }
         installed = true
     }
+
+
 }

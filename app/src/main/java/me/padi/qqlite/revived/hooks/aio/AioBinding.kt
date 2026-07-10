@@ -2,21 +2,31 @@ package me.padi.qqlite.revived.hooks.aio
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.core.view.isVisible
+import androidx.paging.PagingData
+import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import me.padi.qqlite.revived.ModuleMainKt
 import me.padi.qqlite.revived.compose.screens.aio.AioUiController
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
+import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
+import me.padi.qqlite.revived.shared.model.aio.AioLongPressMenuItem
+import me.padi.qqlite.revived.shared.model.aio.AioLongPressMenuState
 import me.padi.qqlite.revived.shared.model.aio.AioUiState
 import me.padi.qqlite.revived.shared.model.aio.sortedOldestFirst
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
@@ -42,10 +52,17 @@ internal class AioBinding(
     private val pendingMessages = LinkedHashMap<String, AioMessage>()
     private val messageViewRefs = LinkedHashMap<String, WeakReference<View>>()
     private val pendingVoiceAutoPlayKeys = LinkedHashSet<String>()
+    private val pendingEmotionPreviewKeys = LinkedHashSet<String>()
     private var flushScheduled = false
     private var renderRefreshScheduled = false
+    private var mediaRefreshSequence = 0
+    private var hostListSyncSequence = 0
     private var loadOlderRequestId = 0
     private var emotionLoadStarted = false
+    private val pendingMemberInfoUids = LinkedHashSet<String>()
+    private var activeLongPressActions: List<() -> Unit> = emptyList()
+    private var pendingLongPressAnchor: IntOffset? = null
+    private val _pagingMessages = MutableStateFlow(PagingData.from(initialState.messages))
     private val _uiState = MutableStateFlow(
         initialState.copy(
             peer = peer,
@@ -55,6 +72,8 @@ internal class AioBinding(
 
     override val uiState: StateFlow<AioUiState>
         get() = _uiState
+    override val pagingMessages: Flow<PagingData<AioMessage>>
+        get() = _pagingMessages
 
     val currentState: AioUiState
         get() = _uiState.value
@@ -170,6 +189,7 @@ internal class AioBinding(
             updateState { state ->
                 state.copy(messages = nextRows, loading = false, loadingOlder = false)
             }
+            publishMessages(nextRows)
         }
     }
 
@@ -180,6 +200,7 @@ internal class AioBinding(
             updateState { state ->
                 state.copy(messages = emptyList(), loading = false, loadingOlder = false)
             }
+            publishMessages(emptyList())
         }
     }
 
@@ -190,11 +211,13 @@ internal class AioBinding(
             }
             val popped = hostFragmentRef.get()?.popWatchFragment() == true
             if (popped) {
+                clearScrollSnapshotForExit()
                 AioRuntimeStore.mainHandler.postDelayed({
                     AioRuntimeStore.releaseAioSurfaceForHome()
                 }, RELEASE_AIO_AFTER_BACK_DELAY_MS)
             }
         }.onFailure {
+            clearScrollSnapshotForExit()
             AioRuntimeStore.releaseAioSurfaceForHome()
             module.logHook(Log.WARN, "AIO compose back failed", it)
         }
@@ -213,6 +236,9 @@ internal class AioBinding(
         val listVb = hostAioListVbRef?.get() ?: AioRuntimeStore.latestAioListVb?.get()
         val inputBar = inputBarControllerRef?.get()
             ?: AioRuntimeStore.latestInputBarController?.get()
+        if (text.isNotBlank()) {
+            updateDraft("")
+        }
         val sent = if (text.isBlank()) {
             false
         } else {
@@ -223,10 +249,11 @@ internal class AioBinding(
             }.getOrDefault(false)
         }
         if (sent) {
-            updateDraft("")
             updateState { state ->
                 state.copy(scrollToBottomRequest = state.scrollToBottomRequest + 1L)
             }
+        } else if (text.isNotBlank()) {
+            updateDraft(text)
         }
     }
 
@@ -294,6 +321,19 @@ internal class AioBinding(
         return sent
     }
 
+    override fun ensureEmotionPreview(item: AioEmotionItem) {
+        if (item.kind == AioEmotionKind.System || item.hasUsablePreviewPath()) return
+        if (!pendingEmotionPreviewKeys.add(item.key)) return
+        hookState.ensureEmotionPreview(item) { updatedItem ->
+            pendingEmotionPreviewKeys.remove(item.key)
+            updateEmotionItem(updatedItem)
+        }
+    }
+
+    override fun getEmotionPreviewDrawable(item: AioEmotionItem): Drawable? {
+        return hookState.getEmotionPreviewDrawable(item)
+    }
+
     override fun createEmotionPreviewView(context: Context, item: AioEmotionItem): View? {
         return hookState.createEmotionPreviewView(context, item)
     }
@@ -323,8 +363,41 @@ internal class AioBinding(
     }
 
     override fun syncHostListPosition(messageKey: String?) {
-        // Compose owns the visible scroll position. Driving the hidden host RecyclerView here
-        // can steal MOVE events through the host gesture stack and makes the sheet feel frozen.
+        val key = messageKey?.takeIf { it.isNotBlank() } ?: return
+        val target = currentState.messages.firstOrNull { it.key == key } ?: return
+        if (target.needsMediaRefreshPoll()) {
+            schedulePendingMediaRefresh(currentState.messages)
+        }
+        if (messageViewRefs[key]?.get() != null) return
+        if (!target.needsHostBinding()) return
+        val targetIndex = currentState.messages.indexOfFirst { it.key == key }
+        if (targetIndex < 0) return
+        val sequence = ++hostListSyncSequence
+        AioRuntimeStore.mainHandler.postDelayed({
+            if (hostListSyncSequence != sequence) return@postDelayed
+            hostListViewRef?.get()?.scrollHostListToPosition(targetIndex)
+        }, 96L)
+    }
+
+    override fun updateScrollSnapshot(firstVisibleMessageKey: String?, firstVisibleMessageOffset: Int) {
+        if (currentState.firstVisibleMessageKey == firstVisibleMessageKey &&
+            currentState.firstVisibleMessageOffset == firstVisibleMessageOffset
+        ) {
+            return
+        }
+        updateState { state ->
+            state.copy(
+                firstVisibleMessageKey = firstVisibleMessageKey,
+                firstVisibleMessageOffset = firstVisibleMessageOffset
+            )
+        }
+    }
+
+    override fun copyMessageText(message: AioMessage, clipboardManager: ClipboardManager): Boolean {
+        val value = message.text.trim()
+        if (value.isBlank()) return false
+        clipboardManager.setText(AnnotatedString(value))
+        return true
     }
 
     override fun clickMessage(message: AioMessage) {
@@ -358,6 +431,52 @@ internal class AioBinding(
         itemView.performBestLongClick()
     }
 
+    override fun rememberLongPressAnchor(anchor: IntOffset) {
+        pendingLongPressAnchor = anchor
+    }
+
+    override fun showLongPressMenu(anchor: IntOffset, items: List<AioLongPressMenuItem>) {
+        if (items.isEmpty()) {
+            dismissLongPressMenu()
+            return
+        }
+        updateState { state ->
+            state.copy(
+                longPressMenu = AioLongPressMenuState(
+                    anchorX = anchor.x,
+                    anchorY = anchor.y,
+                    items = items
+                )
+            )
+        }
+    }
+
+    fun showLongPressMenu(
+        anchor: IntOffset,
+        items: List<AioLongPressMenuItem>,
+        actions: List<() -> Unit>
+    ) {
+        activeLongPressActions = actions
+        showLongPressMenu(anchor, items)
+    }
+
+    override fun dismissLongPressMenu() {
+        activeLongPressActions = emptyList()
+        updateState { state -> state.copy(longPressMenu = null) }
+    }
+
+    override fun selectLongPressMenu(index: Int) {
+        val action = activeLongPressActions.getOrNull(index)
+        dismissLongPressMenu()
+        action?.invoke()
+    }
+
+    fun consumePendingLongPressAnchor(): IntOffset? {
+        val anchor = pendingLongPressAnchor
+        pendingLongPressAnchor = null
+        return anchor
+    }
+
     override fun createAvatarView(context: Context, spec: AvatarSpec?): View {
         return hookState.createAvatarView(context, spec)
     }
@@ -377,6 +496,15 @@ internal class AioBinding(
         AioRuntimeStore.snapshotsByPeer[next.peer.stableKey()] = next
     }
 
+    private fun clearScrollSnapshotForExit() {
+        updateState { state ->
+            state.copy(
+                firstVisibleMessageKey = null,
+                firstVisibleMessageOffset = 0
+            )
+        }
+    }
+
     private fun replaceEmotionCategory(category: AioEmotionCategory) {
         runOnMain {
             updateState { state ->
@@ -384,6 +512,26 @@ internal class AioBinding(
                     if (old.key == category.key) category else old
                 }
                 state.copy(emotionCategories = next)
+            }
+        }
+    }
+
+    private fun updateEmotionItem(item: AioEmotionItem) {
+        runOnMain {
+            updateState { state ->
+                val nextCategories = state.emotionCategories.map { category ->
+                    var changed = false
+                    val nextItems = category.items.map { current ->
+                        if (current.key == item.key) {
+                            changed = true
+                            item
+                        } else {
+                            current
+                        }
+                    }
+                    if (changed) category.copy(items = nextItems) else category
+                }
+                state.copy(emotionCategories = nextCategories)
             }
         }
     }
@@ -406,7 +554,11 @@ internal class AioBinding(
             nextByKey[message.key] = message.copy(itemViewRef = null)
         }
 
-        val nextRows = nextByKey.values.toList().sortedOldestFirst().takeLast(MAX_RENDERED_MESSAGES)
+        val nextRows = nextByKey.values
+            .toList()
+            .dedupeSemanticMessages()
+            .sortedOldestFirst()
+            .takeLast(MAX_RENDERED_MESSAGES)
         val visibleKeys = nextRows.mapTo(HashSet()) { it.key }
         messageViewRefs.keys.retainAll(visibleKeys)
         updateState { state ->
@@ -416,7 +568,10 @@ internal class AioBinding(
                 state.copy(messages = nextRows, loading = false, loadingOlder = false)
             }
         }
+        publishMessages(nextRows)
         triggerPendingVoiceAutoPlay(nextRows)
+        schedulePendingMediaRefresh(nextRows)
+        requestMissingMemberInfo(nextRows)
     }
 
     private fun flushMessages() {
@@ -426,7 +581,11 @@ internal class AioBinding(
         pendingMessages.forEach { (key, message) -> nextByKey[key] = message }
         pendingMessages.clear()
 
-        val nextRows = nextByKey.values.toList().sortedOldestFirst().takeLast(MAX_RENDERED_MESSAGES)
+        val nextRows = nextByKey.values
+            .toList()
+            .dedupeSemanticMessages()
+            .sortedOldestFirst()
+            .takeLast(MAX_RENDERED_MESSAGES)
         val visibleKeys = nextRows.mapTo(HashSet()) { it.key }
         messageViewRefs.keys.retainAll(visibleKeys)
         updateState { state ->
@@ -436,7 +595,50 @@ internal class AioBinding(
                 state.copy(messages = nextRows, loading = false, loadingOlder = false)
             }
         }
+        publishMessages(nextRows)
         triggerPendingVoiceAutoPlay(nextRows)
+        schedulePendingMediaRefresh(nextRows)
+        requestMissingMemberInfo(nextRows)
+    }
+
+    private fun requestMissingMemberInfo(rows: List<AioMessage>) {
+        val peer = currentState.peer
+        if (peer.chatType != GROUP_CHAT_TYPE) return
+        val groupCode = peer.chatUin.takeIf { it > 0L } ?: peer.peerId.toLongOrNull() ?: return
+        val missingUids = rows.asSequence()
+            .filter { it.badges.isEmpty() }
+            .map { it.senderUid }
+            .filter { it.isNotBlank() && pendingMemberInfoUids.add(it) }
+            .toList()
+        if (missingUids.isEmpty()) return
+        val requested = hookState.requestGroupMemberInfo(groupCode, missingUids) { infos ->
+            pendingMemberInfoUids.removeAll(infos.keys)
+            AioRuntimeStore.mergeMemberInfoCache(infos)
+            val hostRows = AioRuntimeStore.latestListUiRows
+            if (!hostRows.isNullOrEmpty()) {
+                upsertMessagesFromHost(hostRows)
+            }
+        }
+        if (!requested) {
+            pendingMemberInfoUids.removeAll(missingUids.toSet())
+        }
+    }
+
+    private fun publishMessages(rows: List<AioMessage>) {
+        _pagingMessages.value = PagingData.from(rows)
+    }
+
+    private fun schedulePendingMediaRefresh(rows: List<AioMessage>) {
+        if (rows.none { it.needsMediaRefreshPoll() }) return
+        val sequence = ++mediaRefreshSequence
+        repeat(20) { index ->
+            AioRuntimeStore.mainHandler.postDelayed({
+                if (mediaRefreshSequence != sequence) return@postDelayed
+                updateState { state ->
+                    state.copy(renderRevision = state.renderRevision + 1L)
+                }
+            }, 500L * (index + 1))
+        }
     }
 
     private fun triggerPendingVoiceAutoPlay(rows: List<AioMessage>) {
@@ -495,6 +697,7 @@ internal class AioBinding(
         const val RENDER_REFRESH_DELAY_MS = 80L
         const val LOAD_OLDER_TIMEOUT_MS = 3000L
         const val RELEASE_AIO_AFTER_BACK_DELAY_MS = 120L
+        const val GROUP_CHAT_TYPE = 2
         const val EMOTION_CATEGORY_FAVORITE = "favorite"
         const val EMOTION_CATEGORY_SYSTEM = "system"
         const val EMOTION_CATEGORY_BIG_SYSTEM = "big-system"
@@ -509,6 +712,63 @@ private fun AioMessage.isVoicePlayable(): Boolean {
     return path.startsWith("content://") ||
         path.startsWith("file://") ||
         File(path).exists()
+}
+
+private fun AioEmotionItem.hasUsablePreviewPath(): Boolean {
+    val path = localPath?.trim()?.takeIf { it.isNotBlank() }
+        ?: resultPath?.trim()?.takeIf { it.isNotBlank() }
+        ?: return false
+    return path.startsWith("content://") ||
+        path.startsWith("file://") ||
+        File(path).isFile
+}
+
+private fun AioMessage.needsMediaRefreshPoll(): Boolean {
+    if (renderKind != AioMessageKind.Image &&
+        renderKind != AioMessageKind.Video &&
+        renderKind != AioMessageKind.Giphy
+    ) {
+        return false
+    }
+    val media = media ?: return false
+    val previewPath = media.previewPath?.trim().orEmpty()
+    val playbackPath = media.playbackPath?.trim().orEmpty()
+    val localPath = media.localPath?.trim().orEmpty()
+    if (previewPath.isBlank() && playbackPath.isBlank() && localPath.isBlank()) {
+        return false
+    }
+    return !media.hasUsablePreviewPath()
+}
+
+private fun AioMessage.needsHostBinding(): Boolean {
+    return renderKind == AioMessageKind.Image ||
+        renderKind == AioMessageKind.Video ||
+        renderKind == AioMessageKind.Giphy ||
+        rawKind == AioMessageKind.FaceBubble
+}
+
+private fun me.padi.qqlite.revived.shared.model.aio.AioMediaSpec.hasUsablePreviewPath(): Boolean {
+    return previewPath.isUsableMediaPath() ||
+        playbackPath.isUsableMediaPath() ||
+        localPath.isUsableMediaPath()
+}
+
+private fun String?.isUsableMediaPath(): Boolean {
+    val path = this?.trim()?.takeIf { it.isNotBlank() } ?: return false
+    return path.startsWith("content://") ||
+        path.startsWith("file://") ||
+        File(path).exists()
+}
+
+private fun View.scrollHostListToPosition(position: Int) {
+    if (position < 0) return
+    (this as? RecyclerView)?.scrollToPosition(position)
+        ?: runCatching {
+            javaClass.methods.firstOrNull { method ->
+                method.name == "scrollToPosition" &&
+                    method.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+            }?.invoke(this, position)
+        }
 }
 
 private fun View.findHostMediaSource(): View? {
@@ -736,6 +996,77 @@ private data class HostClickResult(
     val target: String
 )
 
+private fun List<AioMessage>.dedupeSemanticMessages(): List<AioMessage> {
+    val deduped = LinkedHashMap<String, AioMessage>()
+    for (message in this) {
+        val semanticKey = message.semanticIdentityKey()
+        val existing = deduped[semanticKey]
+        deduped[semanticKey] = if (existing == null) {
+            message
+        } else {
+            existing.preferMoreComplete(message)
+        }
+    }
+    return deduped.values.toList()
+}
+
+private fun AioMessage.semanticIdentityKey(): String {
+    return when {
+        msgId > 0L -> "id:$msgId"
+        msgSeq > 0L && msgRandom > 0L -> "seqrand:$senderUin:$msgSeq:$msgRandom"
+        msgSeq > 0L -> "seq:$senderUin:$msgSeq"
+        else -> buildString {
+            append("fallback:")
+            append(senderUin)
+            append(':')
+            append(senderUid)
+            append(':')
+            append(msgTime)
+            append(':')
+            append(renderKind.name)
+            append(':')
+            append(text)
+            append(':')
+            append(media?.fileName.orEmpty())
+            append(':')
+            append(media?.playbackPath.orEmpty())
+            append(':')
+            append(media?.previewPath.orEmpty())
+            append(':')
+            append(media?.localPath.orEmpty())
+        }
+    }
+}
+
+private fun AioMessage.preferMoreComplete(other: AioMessage): AioMessage {
+    val currentScore = completenessScore()
+    val otherScore = other.completenessScore()
+    return when {
+        otherScore > currentScore -> other
+        otherScore < currentScore -> this
+        other.sortTime > sortTime -> other
+        other.msgId > msgId -> other
+        else -> this
+    }
+}
+
+private fun AioMessage.completenessScore(): Int {
+    var score = 0
+    if (text.isNotBlank()) score += 1
+    if (media != null) score += 2
+    if (!media?.localPath.isNullOrBlank()) score += 2
+    if (!media?.previewPath.isNullOrBlank()) score += 2
+    if (!media?.playbackPath.isNullOrBlank()) score += 2
+    if (!media?.remoteUrl.isNullOrBlank()) score += 1
+    if (avatar != null) score += 1
+    if (rawKind != AioMessageKind.Unsupported) score += 1
+    if (senderName.isNotBlank()) score += 1
+    if (badges.isNotEmpty()) score += 2
+    if (showTimeDivider) score += 1
+    if (timeDividerText.isNotBlank()) score += 1
+    return score
+}
+
 private const val PIC_GROUP_WIDGET_CLASS =
     "com.tencent.watch.aio_impl.ui.cell.pic.WatchPicGroupWidget"
 private const val VIDEO_GROUP_WIDGET_CLASS =
@@ -770,7 +1101,12 @@ private fun AioMessage.sameUi(other: AioMessage): Boolean {
         senderUin == other.senderUin &&
         isSelf == other.isSelf &&
         renderKind == other.renderKind &&
+        rawKind == other.rawKind &&
         text == other.text &&
+        senderName == other.senderName &&
+        badges == other.badges &&
+        showTimeDivider == other.showTimeDivider &&
+        timeDividerText == other.timeDividerText &&
         media == other.media &&
         avatar?.stableKey() == other.avatar?.stableKey()
 }
