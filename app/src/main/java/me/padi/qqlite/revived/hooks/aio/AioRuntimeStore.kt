@@ -101,6 +101,11 @@ internal object AioRuntimeStore {
         latestMemberInfoCache = merged
     }
 
+    fun clearChatTransientState(peerKey: String?) {
+        latestMemberInfoCache = null
+        peerKey?.takeIf { it.isNotBlank() }?.let(snapshotsByPeer::remove)
+    }
+
     fun markAioSurfaceActive() {
         aioSurfaceActive = true
     }

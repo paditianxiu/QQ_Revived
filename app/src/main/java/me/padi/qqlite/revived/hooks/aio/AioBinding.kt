@@ -124,6 +124,11 @@ internal class AioBinding(
         AioRuntimeStore.snapshotsByPeer[currentState.peer.stableKey()] = currentState
     }
 
+    fun clearTransientStateForExit() {
+        clearScrollSnapshotForExit()
+        AioRuntimeStore.clearChatTransientState(currentState.peer.stableKey())
+    }
+
     fun attachHostMsgRepo(repo: Any?) {
         if (repo != null) {
             hostMsgRepoRef = WeakReference(repo)
@@ -211,13 +216,13 @@ internal class AioBinding(
             }
             val popped = hostFragmentRef.get()?.popWatchFragment() == true
             if (popped) {
-                clearScrollSnapshotForExit()
+                clearTransientStateForExit()
                 AioRuntimeStore.mainHandler.postDelayed({
                     AioRuntimeStore.releaseAioSurfaceForHome()
                 }, RELEASE_AIO_AFTER_BACK_DELAY_MS)
             }
         }.onFailure {
-            clearScrollSnapshotForExit()
+            clearTransientStateForExit()
             AioRuntimeStore.releaseAioSurfaceForHome()
             module.logHook(Log.WARN, "AIO compose back failed", it)
         }

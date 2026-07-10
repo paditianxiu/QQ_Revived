@@ -78,6 +78,7 @@ internal object AioComposeHook : BaseHook() {
             module.intercept(
                 state.watchAIOFragmentClass.getDeclaredMethod("onDestroy")
             ) {
+                AioRuntimeStore.findBindingForFragment(thisObject)?.clearTransientStateForExit()
                 val result = proceed()
                 AioRuntimeStore.releaseAioSurfaceForHome()
                 result
