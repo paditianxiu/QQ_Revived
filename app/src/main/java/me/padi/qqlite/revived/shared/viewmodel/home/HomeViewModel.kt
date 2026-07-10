@@ -14,6 +14,7 @@ import me.padi.qqlite.revived.shared.model.home.SelfActionRow
 import me.padi.qqlite.revived.shared.model.home.coerceInHome
 import me.padi.qqlite.revived.shared.model.home.sameContactUi
 import me.padi.qqlite.revived.shared.model.home.sameUi
+import me.padi.qqlite.revived.shared.model.home.sortedForMessageHome
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -37,11 +38,22 @@ class HomeViewModel(initialState: HomeUiState) : ViewModel() {
         val index = rows.indexOfFirst { it.key == row.key }
         if (index >= 0) {
             if (rows[index].sameUi(row)) return
-            rows[index] = row
+            val existing = rows[index]
+            rows[index] = row.copy(
+                orderHint = minOf(row.orderHint, existing.orderHint)
+            )
         } else {
             rows.add(row)
         }
-        updateState { state -> state.copy(recentRows = rows) }
+        val sortedRows = rows.sortedForMessageHome()
+        updateState { state -> state.copy(recentRows = sortedRows) }
+    }
+
+    fun updateRecentRows(rows: List<RecentRow>) {
+        val sortedRows = rows.sortedForMessageHome()
+        updateStateIfChanged(_uiState.value.recentRows != sortedRows) { state ->
+            state.copy(recentRows = sortedRows)
+        }
     }
 
     fun upsertContact(row: ContactRow) {

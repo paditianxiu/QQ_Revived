@@ -60,6 +60,10 @@ internal class HomeBinding(
         viewModel.upsertRecent(row)
     }
 
+    fun updateRecentRows(rows: List<RecentRow>) {
+        viewModel.updateRecentRows(rows)
+    }
+
     fun upsertContact(row: ContactRow) {
         viewModel.upsertContact(row)
     }

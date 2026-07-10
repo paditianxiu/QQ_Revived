@@ -79,6 +79,8 @@ data class RecentRow(
     val title: String,
     val summary: String,
     val time: String,
+    val sortTime: Long,
+    val orderHint: Int = Int.MAX_VALUE,
     val unread: Long,
     val pinned: Boolean,
     val avatar: AvatarSpec?,
@@ -137,7 +139,15 @@ data class SelfActionRow(
 )
 
 fun RecentRow.sameUi(other: RecentRow): Boolean {
-    return key == other.key && title == other.title && summary == other.summary && time == other.time && unread == other.unread && pinned == other.pinned && avatar?.stableKey() == other.avatar?.stableKey()
+    return key == other.key &&
+        title == other.title &&
+        summary == other.summary &&
+        time == other.time &&
+        sortTime == other.sortTime &&
+        orderHint == other.orderHint &&
+        unread == other.unread &&
+        pinned == other.pinned &&
+        avatar?.stableKey() == other.avatar?.stableKey()
 }
 
 fun ContactRow.sameUi(other: ContactRow): Boolean {
@@ -147,4 +157,8 @@ fun ContactRow.sameUi(other: ContactRow): Boolean {
 fun List<ContactRow>.sameContactUi(other: List<ContactRow>): Boolean {
     if (size != other.size) return false
     return indices.all { index -> this[index].sameUi(other[index]) }
+}
+
+fun List<RecentRow>.sortedForMessageHome(): List<RecentRow> {
+    return sortedByDescending { it.sortTime }
 }

@@ -70,7 +70,7 @@ internal data class HomeHookState(
     val lifecycleScopeMethod: Method?,
     val selfProfileServiceClass: Class<*>
 ) {
-    fun toRecentRow(item: Any, fragment: Any?): RecentRow {
+    fun toRecentRow(item: Any, fragment: Any?, orderHint: Int = Int.MAX_VALUE): RecentRow {
         val title = item.findFieldValue("n")?.findFieldValue("d")?.toString().orEmpty()
         val summary = item.findFieldValue("p")?.findFieldValue("e")?.toString().orEmpty()
         val chatType = (item.findFieldValue("k") as? Number)?.toInt() ?: 0
@@ -82,6 +82,8 @@ internal data class HomeHookState(
             title = title.ifBlank { item.toString() },
             summary = summary,
             time = item.findFieldValue("o")?.toString().orEmpty(),
+            sortTime = item.extractRecentSortTime(),
+            orderHint = orderHint,
             unread = (item.findFieldValue("q")?.findFieldValue("b") as? Number)?.toLong() ?: 0L,
             pinned = item.findFieldValue("s") as? Boolean == true,
             avatar = AvatarSpec(chatType, chatUid, avatarUin, WeakReference(fragment)),
@@ -148,6 +150,66 @@ internal data class HomeHookState(
         val cellUserInfo = invokeNoArg("getCellUserInfo") ?: findFieldValue("cellUserInfo")
         return cellUserInfo?.invokeNoArg("getUserV2") ?: cellUserInfo?.findFieldValue("user")
         ?: invokeNoArg("getUser")
+    }
+
+    private fun Any.extractRecentSortTime(): Long {
+        val originData = invokeNoArg("getOriginData") ?: findFieldValue("i")
+        listOf(
+            originData?.invokeNoArg("getSortField"),
+            originData?.findFieldValue("sortField"),
+            originData?.invokeNoArg("getMsgTime"),
+            originData?.findFieldValue("msgTime"),
+            originData?.invokeNoArg("getDraftTime"),
+            originData?.findFieldValue("draftTime"),
+            originData?.invokeNoArg("getTopFlagTime"),
+            originData?.findFieldValue("topFlagTime")
+        ).firstNotNullOfOrNull { it.toEpochMillisOrNull() }?.let { return it }
+
+        val directCandidates = listOf(
+            invokeNoArg("getTimeStamp"),
+            invokeNoArg("getTimestamp"),
+            invokeNoArg("getSortTime"),
+            invokeNoArg("getLastMsgTime"),
+            invokeNoArg("getLastTime"),
+            invokeNoArg("getTime"),
+            findFieldValue("timestamp"),
+            findFieldValue("timeStamp"),
+            findFieldValue("sortTime"),
+            findFieldValue("lastMsgTime"),
+            findFieldValue("lastTime"),
+            findFieldValue("m"),
+            findFieldValue("r"),
+            findFieldValue("t")
+        )
+        directCandidates.firstNotNullOfOrNull { it.toEpochMillisOrNull() }?.let { return it }
+
+        val nestedCandidates = listOf(
+            findFieldValue("n"),
+            findFieldValue("p"),
+            findFieldValue("q"),
+            findFieldValue("commInfo"),
+            invokeNoArg("getCommInfo")
+        )
+        nestedCandidates.firstNotNullOfOrNull { nested ->
+            nested?.let {
+                listOf(
+                    it.invokeNoArg("getTimeStamp"),
+                    it.invokeNoArg("getTimestamp"),
+                    it.invokeNoArg("getSortTime"),
+                    it.invokeNoArg("getLastMsgTime"),
+                    it.invokeNoArg("getTime"),
+                    it.findFieldValue("timestamp"),
+                    it.findFieldValue("timeStamp"),
+                    it.findFieldValue("sortTime"),
+                    it.findFieldValue("lastMsgTime"),
+                    it.findFieldValue("time"),
+                    it.findFieldValue("a"),
+                    it.findFieldValue("b")
+                ).firstNotNullOfOrNull { value -> value.toEpochMillisOrNull() }
+            }
+        }?.let { return it }
+
+        return 0L
     }
 
     private fun Any.qZoneAvatarUrl(): String? {
@@ -523,6 +585,16 @@ internal data class HomeHookState(
         }
     }
 
+}
+
+private fun Any?.toEpochMillisOrNull(): Long? {
+    val raw = when (this) {
+        is Number -> toLong()
+        is String -> trim().toLongOrNull()
+        else -> null
+    } ?: return null
+    if (raw <= 0L) return null
+    return if (raw < 100_000_000_000L) raw * 1000L else raw
 }
 
 private tailrec fun Context?.findActivity(): Activity? {

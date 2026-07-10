@@ -96,6 +96,25 @@ internal object HomeComposeHook : BaseHook() {
                 }
                 result
             }
+
+            module.intercept(
+                state.listAdapterClass.getDeclaredMethod("submitList", List::class.java)
+            ) {
+                val result = proceed()
+                val rows = (args.getOrNull(0) as? List<*>)?.takeIf { items ->
+                    items.isNotEmpty() && items.all { candidate ->
+                        candidate == null || state.recentItemClass.isInstance(candidate)
+                    }
+                }?.mapIndexedNotNull { index, item ->
+                    item?.let { state.toRecentRow(it, HomeRuntimeStore.latestBinding?.get()?.hostFragmentRef?.get(), index) }
+                }.orEmpty()
+                if (rows.isNotEmpty()) {
+                    HomeRuntimeStore.mainHandler.post {
+                        HomeRuntimeStore.latestBinding?.get()?.updateRecentRows(rows)
+                    }
+                }
+                result
+            }
             module.logHook(Log.INFO, "Home recent item hook installed")
         }.onFailure {
             module.logHook(Log.WARN, "Home recent item hook skipped", it)
