@@ -37,7 +37,8 @@ data class AioMessage(
     val senderUid: String,
     val senderUin: Long,
     val isSelf: Boolean,
-    val kind: AioMessageKind,
+    val renderKind: AioMessageKind,
+    val rawKind: AioMessageKind = AioMessageKind.Unsupported,
     val text: String,
     val media: AioMediaSpec? = null,
     val avatar: AvatarSpec? = null,
@@ -51,14 +52,86 @@ data class AioMessage(
         }
 }
 
-enum class AioMessageKind {
-    Text,
-    Image,
-    Video,
-    Voice,
-    File,
-    Tip,
-    Unsupported
+enum class AioMessageKind(val value: Int) {
+    Text(-1),
+    Image(-1),
+    Video(7),
+    Voice(6),
+    File(3),
+    Tip(5),
+    Unsupported(-1),
+    Unknown(0),
+    Null(1),
+    Mix(2),
+    Struct(4),
+    MultiMsgForward(8),
+    Reply(9),
+    Wallet(10),
+    ArkStruct(11),
+    StructLongMsg(12),
+    Giphy(13),
+    Gift(14),
+    TextGift(15),
+    OnlineFile(21),
+    FaceBubble(24),
+    ShareLocation(25),
+    OnlineFolder(27),
+    Prologue(29);
+
+    val displayName: String
+        get() = when (this) {
+            Text -> "文本"
+            Image -> "图片"
+            Video -> "视频"
+            Voice -> "语音"
+            File, OnlineFile, OnlineFolder -> "文件"
+            Tip -> "系统提示"
+            Unsupported -> "暂不支持"
+            Unknown -> "未知消息"
+            Null -> "空消息"
+            Mix -> "混合消息"
+            Struct -> "结构化消息"
+            MultiMsgForward -> "合并转发"
+            Reply -> "回复消息"
+            Wallet -> "钱包消息"
+            ArkStruct -> "卡片消息"
+            StructLongMsg -> "长消息"
+            Giphy -> "Giphy"
+            Gift -> "礼物消息"
+            TextGift -> "文字礼物"
+            FaceBubble -> "头像气泡"
+            ShareLocation -> "位置分享"
+            Prologue -> "开场白"
+        }
+
+    companion object {
+        fun fromMsgType(value: Int): AioMessageKind {
+            return entries.firstOrNull { it.value == value } ?: Unsupported
+        }
+
+        fun fromElementType(value: Int): AioMessageKind {
+            return when (value) {
+                0 -> Unknown
+                1 -> Null
+                2 -> Mix
+                3 -> File
+                4 -> Voice
+                5 -> Video
+                7 -> Reply
+                8 -> Tip
+                9 -> Wallet
+                10 -> ArkStruct
+                13 -> StructLongMsg
+                15 -> Giphy
+                16 -> MultiMsgForward
+                23 -> OnlineFile
+                27 -> FaceBubble
+                28 -> ShareLocation
+                46 -> Prologue
+                else -> Unsupported
+            }
+        }
+    }
 }
 
 data class AioMediaSpec(

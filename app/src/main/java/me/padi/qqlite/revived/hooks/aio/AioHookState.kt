@@ -165,11 +165,14 @@ internal data class AioHookState(
             val msgRandom = msgRandomGetter.invokeLong(msgRecord)
             val msgTime = timeStampGetter.invokeLong(msgRecord).takeIf { it > 0L }
                 ?: msgTimeGetter.invokeLong(msgRecord)
+            val msgType = msgTypeGetter.invokeInt(msgRecord)
             val senderUid = senderUidGetter.invokeString(msgRecord).orEmpty()
             val senderUin = senderUinGetter.invokeLong(msgRecord)
             val isSelf = isSelfMethod.invoke(data) as? Boolean == true
             val parsed = parseElements(msgRecord)
-            val hostTipText = if (parsed.kind == AioMessageKind.Tip) {
+            val rawKind = parsed.rawKind.takeIf { it != AioMessageKind.Unsupported }
+                ?: AioMessageKind.fromMsgType(msgType)
+            val hostTipText = if (parsed.renderKind == AioMessageKind.Tip) {
                 readHostGrayTipText(data)
             } else {
                 null
@@ -185,9 +188,10 @@ internal data class AioHookState(
                 senderUid = senderUid,
                 senderUin = senderUin,
                 isSelf = isSelf,
-                kind = parsed.kind,
+                renderKind = parsed.renderKind,
+                rawKind = rawKind,
                 text = (hostTipText ?: parsed.text).ifBlank {
-                    defaultMessageText(parsed.kind, msgTypeGetter.invokeInt(msgRecord))
+                    defaultMessageText(parsed.renderKind, rawKind, msgType)
                 },
                 media = parsed.media,
                 avatar = senderAvatar(senderUid, senderUin, hostFragment),
@@ -936,10 +940,14 @@ internal data class AioHookState(
         val elements = elementsGetter.invoke(msgRecord) as? Iterable<*> ?: return ParsedMessage()
         val textParts = mutableListOf<String>()
         var media: AioMediaSpec? = null
-        var kind = AioMessageKind.Unsupported
+        var renderKind = AioMessageKind.Unsupported
+        var rawKind = AioMessageKind.Unsupported
         var hasTip = false
 
         elements.filterNotNull().forEach { element ->
+            if (rawKind == AioMessageKind.Unsupported) {
+                rawKind = AioMessageKind.fromElementType(elementTypeGetter.invokeInt(element))
+            }
             textElementGetter.invokeAny(element)?.let { textElement ->
                 textContentGetter.invokeString(textElement)?.takeIf { it.isNotBlank() }
                     ?.let(textParts::add)
@@ -947,13 +955,13 @@ internal data class AioHookState(
             if (media == null) {
                 videoElementGetter.invokeAny(element)?.let { video ->
                     media = parseVideo(video)
-                    kind = AioMessageKind.Video
+                    renderKind = AioMessageKind.Video
                 }
             }
             if (media == null) {
                 picElementGetter.invokeAny(element)?.let { pic ->
                     media = parsePic(pic)
-                    kind = AioMessageKind.Image
+                    renderKind = AioMessageKind.Image
                 }
             }
             if (media == null) {
@@ -961,13 +969,13 @@ internal data class AioHookState(
                     media = parsePtt(ptt)
                     pttTextGetter?.invokeString(ptt)?.takeIf { it.isNotBlank() }
                         ?.let(textParts::add)
-                    kind = AioMessageKind.Voice
+                    renderKind = AioMessageKind.Voice
                 }
             }
             if (media == null) {
                 fileElementGetter.invokeAny(element)?.let { file ->
                     media = parseFile(file)
-                    kind = AioMessageKind.File
+                    renderKind = AioMessageKind.File
                 }
             }
             if (grayTipElementGetter.invokeAny(element) != null) {
@@ -975,14 +983,14 @@ internal data class AioHookState(
             }
         }
 
-        if (kind == AioMessageKind.Unsupported) {
-            kind = when {
+        if (renderKind == AioMessageKind.Unsupported) {
+            renderKind = when {
                 textParts.isNotEmpty() -> AioMessageKind.Text
                 hasTip -> AioMessageKind.Tip
                 else -> AioMessageKind.Unsupported
             }
         }
-        return ParsedMessage(kind, textParts.joinToString(""), media)
+        return ParsedMessage(renderKind, rawKind, textParts.joinToString(""), media)
     }
 
     private fun parsePic(pic: Any): AioMediaSpec {
@@ -1084,15 +1092,20 @@ internal data class AioHookState(
         return "$msgId:$msgSeq:$msgRandom:$msgTime:$senderUid:$senderUin"
     }
 
-    private fun defaultMessageText(kind: AioMessageKind, msgType: Int): String {
-        return when (kind) {
+    private fun defaultMessageText(
+        renderKind: AioMessageKind,
+        rawKind: AioMessageKind,
+        msgType: Int
+    ): String {
+        return when (renderKind) {
             AioMessageKind.Image -> "图片"
             AioMessageKind.Video -> "视频"
             AioMessageKind.Voice -> "语音"
             AioMessageKind.File -> "文件"
             AioMessageKind.Tip -> "系统提示"
             AioMessageKind.Text -> ""
-            AioMessageKind.Unsupported -> "暂不支持的消息类型 $msgType"
+            else -> "[${rawKind.takeIf { it != AioMessageKind.Unsupported }?.displayName}]"
+                ?: "暂不支持的消息类型 $msgType"
         }
     }
 
@@ -1140,7 +1153,8 @@ internal data class AioHookState(
     }
 
     private data class ParsedMessage(
-        val kind: AioMessageKind = AioMessageKind.Unsupported,
+        val renderKind: AioMessageKind = AioMessageKind.Unsupported,
+        val rawKind: AioMessageKind = AioMessageKind.Unsupported,
         val text: String = "",
         val media: AioMediaSpec? = null
     )

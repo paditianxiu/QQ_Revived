@@ -11,8 +11,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,7 +39,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -117,6 +116,7 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import android.graphics.Color as AndroidColor
+import androidx.compose.foundation.lazy.grid.items as gridItems
 
 @Composable
 internal fun AioChatScreen(controller: AioUiController) {
@@ -217,12 +217,12 @@ private fun ApplyAioEdgeToEdge() {
                 window.insetsController?.setSystemBarsAppearance(
                     if (useLightSystemBars) {
                         WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
                     } else {
                         0
                     },
                     WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                        WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
                 )
             }
             val lightFlags = if (useLightSystemBars) {
@@ -232,12 +232,12 @@ private fun ApplyAioEdgeToEdge() {
             }
             window.decorView.systemUiVisibility =
                 (window.decorView.systemUiVisibility and
-                    (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
-                        View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()) or
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    lightFlags
+                        (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
+                                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()) or
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                        lightFlags
         }
 
         onDispose {
@@ -320,7 +320,7 @@ private fun AioTopBar(
                     targetState = peer.displayName,
                     transitionSpec = {
                         fadeIn(animationSpec = tween(150)) togetherWith
-                            fadeOut(animationSpec = tween(90))
+                                fadeOut(animationSpec = tween(90))
                     },
                     label = "aioTitle"
                 ) { title ->
@@ -454,9 +454,9 @@ private fun AioMessageList(
         if (!didInitialScroll || messages.isEmpty()) return@LaunchedEffect
         snapshotFlow {
             listState.isScrollInProgress &&
-                listState.firstVisibleItemIndex == 0 &&
-                listState.firstVisibleItemScrollOffset == 0 &&
-                listState.layoutInfo.totalItemsCount > listState.layoutInfo.visibleItemsInfo.size
+                    listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset == 0 &&
+                    listState.layoutInfo.totalItemsCount > listState.layoutInfo.visibleItemsInfo.size
         }
             .distinctUntilChanged()
             .filter { it }
@@ -530,7 +530,7 @@ private fun AioMessageRow(
     renderRevision: Long,
     controller: AioUiController
 ) {
-    if (message.kind == AioMessageKind.Tip) {
+    if (message.renderKind == AioMessageKind.Tip) {
         TipMessage(message.text)
         return
     }
@@ -543,6 +543,7 @@ private fun AioMessageRow(
         if (!message.isSelf) {
             AioAvatar(
                 controller = controller,
+                message = message,
                 spec = message.avatar,
                 fallback = message.senderUid.take(1),
                 size = 32
@@ -559,6 +560,7 @@ private fun AioMessageRow(
             Spacer(modifier = Modifier.width(8.dp))
             AioAvatar(
                 controller = controller,
+                message = message,
                 spec = message.avatar,
                 fallback = "我",
                 size = 32
@@ -596,7 +598,7 @@ private fun MessageBubble(
             )
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
-            when (message.kind) {
+            when (message.renderKind) {
                 AioMessageKind.Text -> TextMessageContent(message, contentColor)
                 AioMessageKind.Image -> ImageMessageContent(
                     message,
@@ -604,20 +606,40 @@ private fun MessageBubble(
                     controller,
                     contentColor
                 )
+
                 AioMessageKind.Video -> VideoMessageContent(
                     message,
                     renderRevision,
                     controller,
                     contentColor
                 )
+
                 AioMessageKind.Voice -> VoiceMessageContent(message, contentColor)
                 AioMessageKind.File -> FileMessageContent(message, contentColor)
-                AioMessageKind.Unsupported -> UnsupportedMessageContent(
+                AioMessageKind.Unsupported,
+                AioMessageKind.Unknown,
+                AioMessageKind.Null,
+                AioMessageKind.Mix,
+                AioMessageKind.Struct,
+                AioMessageKind.MultiMsgForward,
+                AioMessageKind.Reply,
+                AioMessageKind.Wallet,
+                AioMessageKind.ArkStruct,
+                AioMessageKind.StructLongMsg,
+                AioMessageKind.Giphy,
+                AioMessageKind.Gift,
+                AioMessageKind.TextGift,
+                AioMessageKind.OnlineFile,
+                AioMessageKind.FaceBubble,
+                AioMessageKind.ShareLocation,
+                AioMessageKind.OnlineFolder,
+                AioMessageKind.Prologue -> UnsupportedMessageContent(
                     message = message,
                     renderRevision = renderRevision,
                     controller = controller,
                     contentColor = contentColor
                 )
+
                 AioMessageKind.Tip -> TextMessageContent(message, contentColor)
             }
             Text(
@@ -813,7 +835,7 @@ private fun rememberHostMessagePreviewView(
     controller: AioUiController,
     context: Context
 ): View? {
-    return remember(message.key, message.kind, message.media, renderRevision) {
+    return remember(message.key, message.renderKind, message.media, renderRevision) {
         controller.createHostMessagePreviewView(context, message)
     }
 }
@@ -825,18 +847,25 @@ private fun UnsupportedMessageContent(
     controller: AioUiController,
     contentColor: Color
 ) {
-    HostMessagePreview(
-        message = message,
-        renderRevision = renderRevision,
-        controller = controller,
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(resolveAspectRatio(message.media, 1f))
-    ) {
+    Column {
         Text(
             text = message.text,
             color = contentColor.copy(alpha = 0.82f),
             fontSize = 14.sp
+        )
+        Text(
+            text = buildString {
+                append(message.rawKind.name)
+                message.rawKind.value.takeIf { it >= 0 }?.let {
+                    append(" (")
+                    append(it)
+                    append(')')
+                }
+            },
+            color = contentColor.copy(alpha = 0.56f),
+            style = MiuixTheme.textStyles.body2,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 4.dp)
         )
     }
 }
@@ -1081,7 +1110,7 @@ private fun AioEmojiSheet(
                 targetState = selectedTabIndex,
                 transitionSpec = {
                     fadeIn(animationSpec = tween(160)) togetherWith
-                        fadeOut(animationSpec = tween(90))
+                            fadeOut(animationSpec = tween(90))
                 },
                 label = "aioEmojiCategory",
                 modifier = Modifier
@@ -1226,6 +1255,7 @@ private fun AioEmotionSheetState(
 @Composable
 private fun AioAvatar(
     controller: AioUiController,
+    message: AioMessage? = null,
     spec: AvatarSpec?,
     fallback: String,
     size: Int,
@@ -1237,7 +1267,11 @@ private fun AioAvatar(
             .size(size.dp)
             .clip(CircleShape)
             .background(MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.22f))
-            .border(1.dp, MiuixTheme.colorScheme.outline.copy(alpha = 0.18f), CircleShape),
+            .border(1.dp, MiuixTheme.colorScheme.outline.copy(alpha = 0.18f), CircleShape)
+            .combinedClickable(
+                onClick = { message?.let(controller::clickAvatar) },
+                onLongClick = { message?.let(controller::longClickMessage) }
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (useHostAvatar && spec != null && (spec.uid.isNotBlank() || spec.uin > 0L)) {
@@ -1349,7 +1383,8 @@ private fun imageModel(value: String?): Any? {
     return when {
         normalized.startsWith("/") -> File(normalized).takeIf { it.exists() }
         normalized.startsWith("file://", ignoreCase = true) ||
-            normalized.startsWith("content://", ignoreCase = true) -> normalized
+                normalized.startsWith("content://", ignoreCase = true) -> normalized
+
         else -> normalizeImageUrl(normalized)
     }
 }
@@ -1385,7 +1420,8 @@ private fun normalizeImageUrl(value: String?): String? {
     val url = value?.trim()?.takeIf(String::isNotBlank) ?: return null
     return when {
         url.startsWith("http://", ignoreCase = true) ||
-            url.startsWith("https://", ignoreCase = true) -> url
+                url.startsWith("https://", ignoreCase = true) -> url
+
         url.startsWith("//") -> "https:$url"
         url.contains('.') && !url.startsWith("/") -> "https://$url"
         else -> url

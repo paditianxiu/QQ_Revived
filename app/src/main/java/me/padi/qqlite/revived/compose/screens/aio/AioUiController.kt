@@ -23,6 +23,7 @@ internal interface AioUiController {
     fun loadOlderMessages()
     fun syncHostListPosition(messageKey: String?)
     fun clickMessage(message: AioMessage)
+    fun clickAvatar(message: AioMessage)
     fun longClickMessage(message: AioMessage)
     fun createAvatarView(context: Context, spec: AvatarSpec?): View
     fun reloadAvatar(view: View, spec: AvatarSpec?)

@@ -15,10 +15,12 @@ import me.padi.qqlite.revived.compose.screens.aio.AioUiController
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
+import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.aio.AioUiState
 import me.padi.qqlite.revived.shared.model.aio.sortedOldestFirst
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
+import java.io.File
 import java.lang.ref.WeakReference
 
 internal class AioBinding(
@@ -39,6 +41,7 @@ internal class AioBinding(
     private var hostListViewRef: WeakReference<View>? = null
     private val pendingMessages = LinkedHashMap<String, AioMessage>()
     private val messageViewRefs = LinkedHashMap<String, WeakReference<View>>()
+    private val pendingVoiceAutoPlayKeys = LinkedHashSet<String>()
     private var flushScheduled = false
     private var renderRefreshScheduled = false
     private var loadOlderRequestId = 0
@@ -326,7 +329,28 @@ internal class AioBinding(
 
     override fun clickMessage(message: AioMessage) {
         val itemView = messageViewRefs[message.key]?.get()
-        itemView.performBestClick()
+        when (message.renderKind) {
+            AioMessageKind.Voice -> {
+                if (!message.isVoicePlayable()) {
+                    pendingVoiceAutoPlayKeys += message.key
+                }
+                itemView.performBoundVoiceClick()
+            }
+
+            AioMessageKind.Image,
+            AioMessageKind.Video,
+            AioMessageKind.FaceBubble,
+            AioMessageKind.Giphy -> {
+                itemView.performBoundMediaClick()
+            }
+
+            else -> Unit
+        }
+    }
+
+    override fun clickAvatar(message: AioMessage) {
+        val itemView = messageViewRefs[message.key]?.get()
+        itemView.performBestAvatarClick()
     }
 
     override fun longClickMessage(message: AioMessage) {
@@ -392,6 +416,7 @@ internal class AioBinding(
                 state.copy(messages = nextRows, loading = false, loadingOlder = false)
             }
         }
+        triggerPendingVoiceAutoPlay(nextRows)
     }
 
     private fun flushMessages() {
@@ -410,6 +435,23 @@ internal class AioBinding(
             } else {
                 state.copy(messages = nextRows, loading = false, loadingOlder = false)
             }
+        }
+        triggerPendingVoiceAutoPlay(nextRows)
+    }
+
+    private fun triggerPendingVoiceAutoPlay(rows: List<AioMessage>) {
+        if (pendingVoiceAutoPlayKeys.isEmpty()) return
+        val readyMessages = rows.filter { message ->
+            message.key in pendingVoiceAutoPlayKeys && message.renderKind == AioMessageKind.Voice &&
+                message.isVoicePlayable()
+        }
+        if (readyMessages.isEmpty()) return
+        readyMessages.forEach { message ->
+            pendingVoiceAutoPlayKeys.remove(message.key)
+            val itemView = messageViewRefs[message.key]?.get() ?: return@forEach
+            AioRuntimeStore.mainHandler.postDelayed({
+                itemView.performBoundVoiceClick()
+            }, 120L)
         }
     }
 
@@ -458,6 +500,15 @@ internal class AioBinding(
         const val EMOTION_CATEGORY_BIG_SYSTEM = "big-system"
         const val EMOTION_CATEGORY_HOT = "hot"
     }
+}
+
+private fun AioMessage.isVoicePlayable(): Boolean {
+    if (renderKind != AioMessageKind.Voice) return false
+    val path = media?.localPath?.trim().orEmpty()
+    if (path.isBlank()) return false
+    return path.startsWith("content://") ||
+        path.startsWith("file://") ||
+        File(path).exists()
 }
 
 private fun View.findHostMediaSource(): View? {
@@ -517,6 +568,52 @@ private fun View?.performBestClick(): HostClickResult {
     return HostClickResult(target?.performClick() == true, target.clickTargetName())
 }
 
+private fun View?.performBoundVoiceClick(): HostClickResult {
+    if (this == null) return HostClickResult(false, "null")
+    val pttGroup = findFirstDescendantByClassName(PTT_GROUP_WIDGET_CLASS) ?: return HostClickResult(
+        false,
+        "null"
+    )
+    pttGroup.findFirstDescendantByClassName(PTT_WAVE_VIEW_CLASS)?.let { target ->
+        val result = target.invokeBoundClickListener(fallbackToPerformClick = false)
+        if (result.clicked) return result
+    }
+    pttGroup.findFirstClickableDescendantBySimpleName("LinearLayout")?.let { target ->
+        val result = target.invokeBoundClickListener(fallbackToPerformClick = false)
+        if (result.clicked) return result
+    }
+    return HostClickResult(false, pttGroup.clickTargetName())
+}
+
+private fun View?.performBoundMediaClick(): HostClickResult {
+    if (this == null) return HostClickResult(false, "null")
+    val mediaView = findHostMediaSource() ?: return HostClickResult(false, "null")
+    val directResult = mediaView.invokeBoundClickListener(fallbackToPerformClick = true)
+    if (directResult.clicked) return directResult
+    generateSequence(mediaView.parent) { parent -> (parent as? View)?.parent }
+        .mapNotNull { it as? View }
+        .forEach { parentView ->
+            val result = parentView.invokeBoundClickListener(fallbackToPerformClick = false)
+            if (result.clicked) {
+                return result
+            }
+        }
+    return directResult
+}
+
+private fun View?.performBestAvatarClick(): HostClickResult {
+    if (this == null) return HostClickResult(false, "null")
+    val target = findPreferredClickableDescendant(
+        preferredClassNames = listOf(
+            HOST_AVATAR_VIEW_CLASS.lowercase(),
+            "avatar",
+            "head",
+            "profile"
+        )
+    ) ?: findFirstDescendantByClassName(HOST_AVATAR_VIEW_CLASS)
+    return target.invokeBoundClickListener()
+}
+
 private fun View?.performBestLongClick(): HostClickResult {
     if (this == null) return HostClickResult(false, "null")
     if (performLongClick()) return HostClickResult(true, clickTargetName())
@@ -542,6 +639,47 @@ private fun View.findLargestClickableDescendant(): View? {
     return bestView
 }
 
+private fun View.findPreferredClickableDescendant(preferredClassNames: List<String>): View? {
+    val normalized = preferredClassNames.map { it.lowercase() }
+    var bestView: View? = null
+    var bestScore = Int.MIN_VALUE
+    var bestArea = Int.MIN_VALUE
+    forEachDescendant { view ->
+        if (view !== this && view.isVisible && view.isEnabled &&
+            (view.hasOnClickListeners() || view.isClickable)
+        ) {
+            val className = view.javaClass.name.lowercase()
+            val score = normalized.indexOfFirst { token -> className.contains(token) }
+                .let { index -> if (index >= 0) normalized.size - index else Int.MIN_VALUE }
+            if (score > bestScore || (score == bestScore && view.touchArea() > bestArea)) {
+                bestView = view
+                bestScore = score
+                bestArea = view.touchArea()
+            }
+        }
+        false
+    }
+    return bestView?.takeIf { bestScore > Int.MIN_VALUE }
+}
+
+private fun View.findFirstClickableDescendantBySimpleName(simpleName: String): View? {
+    var matched: View? = null
+    forEachDescendant { view ->
+        if (view !== this &&
+            view.isVisible &&
+            view.isEnabled &&
+            (view.hasOnClickListeners() || view.isClickable) &&
+            view.javaClass.simpleName == simpleName
+        ) {
+            matched = view
+            true
+        } else {
+            false
+        }
+    }
+    return matched
+}
+
 private fun View.findLargestLongClickableDescendant(): View? {
     var bestView: View? = null
     var bestArea = 0
@@ -564,6 +702,30 @@ private fun View.touchArea(): Int {
     return resolvedWidth * resolvedHeight
 }
 
+private fun View?.invokeBoundClickListener(fallbackToPerformClick: Boolean = true): HostClickResult {
+    if (this == null) return HostClickResult(false, "null")
+    val listener = readBoundClickListener()
+    if (listener != null) {
+        runCatching {
+            listener.javaClass.getMethod("onClick", View::class.java).invoke(listener, this)
+        }.onSuccess {
+            return HostClickResult(true, clickTargetName())
+        }
+    }
+    return HostClickResult(if (fallbackToPerformClick) performClick() else false, clickTargetName())
+}
+
+private fun View.readBoundClickListener(): Any? {
+    val listenerInfo = runCatching {
+        View::class.java.getDeclaredMethod("getListenerInfo").apply { isAccessible = true }.invoke(this)
+    }.getOrNull() ?: return null
+    return runCatching {
+        listenerInfo.javaClass.getDeclaredField("mOnClickListener")
+            .apply { isAccessible = true }
+            .get(listenerInfo)
+    }.getOrNull()
+}
+
 private fun View?.clickTargetName(): String {
     if (this == null) return "null"
     return "${javaClass.simpleName}{clickable=$isClickable longClickable=$isLongClickable size=${width}x$height}"
@@ -578,6 +740,12 @@ private const val PIC_GROUP_WIDGET_CLASS =
     "com.tencent.watch.aio_impl.ui.cell.pic.WatchPicGroupWidget"
 private const val VIDEO_GROUP_WIDGET_CLASS =
     "com.tencent.watch.aio_impl.ui.cell.video.WatchVideoGroupWidget"
+private const val PTT_GROUP_WIDGET_CLASS =
+    "com.tencent.watch.aio_impl.ui.cell.ptt.WatchPttCellGroupWidget"
+private const val PTT_WAVE_VIEW_CLASS =
+    "com.tencent.watch.aio_impl.ui.cell.ptt.PttAudioWaveView"
+private const val HOST_AVATAR_VIEW_CLASS =
+    "com.tencent.qqnt.avatar.WatchAvatarView"
 private const val FACE_BUBBLE_GROUP_WIDGET_CLASS =
     "com.tencent.watch.aio_impl.ui.cell.facebubble.bubble.WatchFaceBubbleGroupWidget"
 private const val MARKET_FACE_GROUP_WIDGET_CLASS =
@@ -601,7 +769,7 @@ private fun AioMessage.sameUi(other: AioMessage): Boolean {
         senderUid == other.senderUid &&
         senderUin == other.senderUin &&
         isSelf == other.isSelf &&
-        kind == other.kind &&
+        renderKind == other.renderKind &&
         text == other.text &&
         media == other.media &&
         avatar?.stableKey() == other.avatar?.stableKey()
