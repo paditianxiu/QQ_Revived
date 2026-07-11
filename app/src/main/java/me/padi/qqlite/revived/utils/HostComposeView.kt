@@ -1,8 +1,11 @@
 package me.padi.qqlite.revived.utils
 
 import android.annotation.SuppressLint
+import android.content.res.AssetManager
 import android.app.Dialog
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.res.Resources
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -146,7 +149,8 @@ private class HostComposeBinding(
         nextOwner.resume()
         onOwnerReady(nextOwner)
 
-        val nextHost = createComposeHost(root, nextOwner)
+        val composeContext = root.context.asModuleComposeContext()
+        val nextHost = createComposeHost(root, nextOwner, composeContext)
         hostView = nextHost
         onHostViewReady(nextHost)
         if (useWindowLayer) {
@@ -206,15 +210,15 @@ private class HostComposeBinding(
         }
     }
 
-    private fun createComposeHost(root: View, owner: HostComposeOwner): View {
-        val composeView = createComposeView(root, owner)
+    private fun createComposeHost(root: View, owner: HostComposeOwner, composeContext: Context): View {
+        val composeView = createComposeView(root, owner, composeContext)
         if (!wrapInContainer) {
             composeView.tag = viewTag
             return composeView
         }
 
         composeView.tag = "$viewTag.ComposeView"
-        return HostComposeContainer(root.context).apply {
+        return HostComposeContainer(composeContext).apply {
             tag = viewTag
             owner.install(this)
             isClickable = composeView.isClickable
@@ -239,8 +243,8 @@ private class HostComposeBinding(
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun createComposeView(root: View, owner: HostComposeOwner): ComposeView {
-        return ComposeView(root.context).apply {
+    private fun createComposeView(root: View, owner: HostComposeOwner, composeContext: Context): ComposeView {
+        return ComposeView(composeContext).apply {
             owner.install(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             isClickable = false
@@ -335,6 +339,46 @@ private class HostComposeContainer(context: Context) : FrameLayout(context) {
     }
 }
 
+private fun Context.asModuleComposeContext(): Context {
+    val sourceContext = applicationContext ?: this
+    val moduleContext = runCatching {
+        sourceContext.createPackageContext(
+            MODULE_PACKAGE_NAME,
+            Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
+        )
+    }.getOrNull() ?: return this
+    return ModuleResourceContext(this, moduleContext)
+}
+
+private class ModuleResourceContext(
+    base: Context,
+    private val moduleContext: Context
+) : ContextWrapper(base) {
+    override fun getApplicationContext(): Context {
+        return baseContext.applicationContext ?: baseContext
+    }
+
+    override fun getResources(): Resources {
+        return moduleContext.resources
+    }
+
+    override fun getAssets(): AssetManager {
+        return moduleContext.assets
+    }
+
+    override fun getTheme(): Resources.Theme {
+        return moduleContext.theme
+    }
+
+    override fun getClassLoader(): ClassLoader {
+        return moduleContext.classLoader
+    }
+
+    override fun getPackageName(): String {
+        return moduleContext.packageName
+    }
+}
+
 private fun View.disposeComposeChildren() {
     if (this is ComposeView) {
         disposeComposition()
@@ -345,6 +389,8 @@ private fun View.disposeComposeChildren() {
         getChildAt(index).disposeComposeChildren()
     }
 }
+
+private const val MODULE_PACKAGE_NAME = "me.padi.qqlite.revived"
 
 private class HostComposeOwner : LifecycleOwner,
     SavedStateRegistryOwner,
