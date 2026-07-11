@@ -820,6 +820,7 @@ private fun MessageBubble(
         Column(modifier = Modifier.padding(10.dp)) {
             when (message.renderKind) {
                 AioMessageKind.Text -> TextMessageContent(message, contentColor)
+                AioMessageKind.Call -> CallMessageContent(message, contentColor)
                 AioMessageKind.Image,
                 AioMessageKind.Giphy -> ImageMessageContent(
                     message,
@@ -1248,6 +1249,34 @@ private fun UnsupportedMessageContent(
             style = MiuixTheme.textStyles.body2,
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun CallMessageContent(message: AioMessage, contentColor: Color) {
+    val isVideoCall = message.text.contains("视频通话")
+    val icon = if (isVideoCall) {
+        Icons.Filled.Videocam
+    } else {
+        Icons.Filled.Mic
+    }
+    val statusText = message.text
+        .removePrefix(if (isVideoCall) "视频通话" else "语音通话")
+        .trim()
+        .ifBlank { if (isVideoCall) "视频通话" else "语音通话" }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = statusText,
+            color = contentColor,
+            fontSize = 15.sp,
+            modifier = Modifier.padding(start = 8.dp)
         )
     }
 }

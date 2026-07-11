@@ -104,11 +104,14 @@ internal data class AioHookState(
     val elementTypeGetter: Method,
     val textElementGetter: Method,
     val picElementGetter: Method,
+    val avRecordElementGetter: Method,
     val videoElementGetter: Method,
     val pttElementGetter: Method,
     val fileElementGetter: Method,
     val grayTipElementGetter: Method,
     val textContentGetter: Method,
+    val avRecordTextGetter: Method,
+    val avRecordTypeGetter: Method,
     val picSourcePathGetter: Method,
     val picThumbPathGetter: Method,
     val picOriginUrlGetter: Method,
@@ -1138,6 +1141,10 @@ internal data class AioHookState(
                 textContentGetter.invokeString(textElement)?.takeIf { it.isNotBlank() }
                     ?.let(textParts::add)
             }
+            avRecordElementGetter.invokeAny(element)?.let { avRecord ->
+                parseAvRecordText(avRecord).takeIf { it.isNotBlank() }?.let(textParts::add)
+                renderKind = AioMessageKind.Call
+            }
             if (media == null) {
                 videoElementGetter.invokeAny(element)?.let { video ->
                     media = parseVideo(video)
@@ -1198,6 +1205,14 @@ internal data class AioHookState(
             height = picHeightGetter.invokeInt(pic),
             fileName = picFileNameGetter.invokeString(pic)
         )
+    }
+
+    private fun parseAvRecordText(avRecord: Any): String {
+        val detail = avRecordTextGetter.invokeString(avRecord)?.trim().orEmpty()
+        val type = avRecordTypeGetter.invokeInt(avRecord)
+        val kindLabel = if (type in VIDEO_AV_RECORD_TYPES) "视频通话" else "语音通话"
+        if (detail.isBlank()) return kindLabel
+        return if (detail.contains(kindLabel)) detail else "$kindLabel $detail"
     }
 
     private fun parseVideo(video: Any): AioMediaSpec {
@@ -1412,6 +1427,7 @@ internal data class AioHookState(
     ): String {
         return when (renderKind) {
             AioMessageKind.Image -> "图片"
+            AioMessageKind.Call -> "通话"
             AioMessageKind.Video -> "视频"
             AioMessageKind.Voice -> "语音"
             AioMessageKind.File -> "文件"
@@ -1490,6 +1506,7 @@ internal data class AioHookState(
         private const val PIC_THUMB_SIZE_SMALL = 198
         private const val PIC_THUMB_SIZE_ORIGIN = 0
         private const val PIC_THUMB_SIZE_LARGE = 720
+        private val VIDEO_AV_RECORD_TYPES = setOf(2, 3, 4, 5, 6, 12, 26, 28)
         private const val REQUEST_KEY = "request_key"
         private const val EMOTION_CATEGORY_FAVORITE = "favorite"
         private const val EMOTION_CATEGORY_SYSTEM = "system"
@@ -1577,6 +1594,7 @@ internal data class AioHookState(
             val textElementClass = classLoader.findTargetClass(TEXT_ELEMENT_CLASS)
             val picElementClass = classLoader.findTargetClass(PIC_ELEMENT_CLASS)
             val watchPicElementExtClass = classLoader.findOptionalClass(WATCH_PIC_ELEMENT_EXT_CLASS)
+            val avRecordElementClass = classLoader.findTargetClass(AV_RECORD_ELEMENT_CLASS)
             val videoElementClass = classLoader.findTargetClass(VIDEO_ELEMENT_CLASS)
             val pttElementClass = classLoader.findTargetClass(PTT_ELEMENT_CLASS)
             val fileElementClass = classLoader.findTargetClass(FILE_ELEMENT_CLASS)
@@ -1716,11 +1734,14 @@ internal data class AioHookState(
                 elementTypeGetter = msgElementClass.requiredMethod("getElementType"),
                 textElementGetter = msgElementClass.requiredMethod("getTextElement"),
                 picElementGetter = msgElementClass.requiredMethod("getPicElement"),
+                avRecordElementGetter = msgElementClass.requiredMethod("getAvRecordElement"),
                 videoElementGetter = msgElementClass.requiredMethod("getVideoElement"),
                 pttElementGetter = msgElementClass.requiredMethod("getPttElement"),
                 fileElementGetter = msgElementClass.requiredMethod("getFileElement"),
                 grayTipElementGetter = msgElementClass.requiredMethod("getGrayTipElement"),
                 textContentGetter = textElementClass.requiredMethod("getContent"),
+                avRecordTextGetter = avRecordElementClass.requiredMethod("getText"),
+                avRecordTypeGetter = avRecordElementClass.requiredMethod("getType"),
                 picSourcePathGetter = picElementClass.requiredMethod("getSourcePath"),
                 picThumbPathGetter = picElementClass.requiredMethod("getThumbPath"),
                 picOriginUrlGetter = picElementClass.requiredMethod("getOriginImageUrl"),

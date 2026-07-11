@@ -78,6 +78,7 @@ data class AioMessage(
 enum class AioMessageKind(val value: Int) {
     Text(-1),
     Image(-1),
+    Call(19),
     Video(7),
     Voice(6),
     File(3),
@@ -105,6 +106,7 @@ enum class AioMessageKind(val value: Int) {
         get() = when (this) {
             Text -> "文本"
             Image -> "图片"
+            Call -> "通话"
             Video -> "视频"
             Voice -> "语音"
             File, OnlineFile, OnlineFolder -> "文件"
@@ -147,6 +149,7 @@ enum class AioMessageKind(val value: Int) {
                 13 -> StructLongMsg
                 15 -> Giphy
                 16 -> MultiMsgForward
+                21 -> Call
                 23 -> OnlineFile
                 27 -> FaceBubble
                 28 -> ShareLocation
