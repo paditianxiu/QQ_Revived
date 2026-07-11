@@ -26,6 +26,7 @@ internal interface AioUiController {
     fun startVoiceCall(): Boolean
     fun startVideoCall(): Boolean
     fun openEmojiPanel()
+    fun sendCustomPbMessage(json: String): Boolean
     fun requestEmotionCategories()
     fun clickEmotion(item: AioEmotionItem): Boolean
     fun ensureEmotionPreview(item: AioEmotionItem)

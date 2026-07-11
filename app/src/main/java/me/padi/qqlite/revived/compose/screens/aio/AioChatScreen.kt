@@ -21,6 +21,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
@@ -77,6 +79,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -92,7 +95,6 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.graphics.withClip
@@ -110,11 +112,11 @@ import kotlinx.coroutines.flow.filter
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
+import me.padi.qqlite.revived.shared.model.aio.AioLongPressMenuState
 import me.padi.qqlite.revived.shared.model.aio.AioMediaSpec
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
 import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
-import me.padi.qqlite.revived.shared.model.aio.AioLongPressMenuState
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
 import top.yukonga.miuix.kmp.basic.Button
@@ -128,16 +130,20 @@ import top.yukonga.miuix.kmp.basic.ListPopupColumn
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
 import top.yukonga.miuix.kmp.window.WindowBottomSheet
+import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.window.WindowListPopup
 import java.io.File
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -148,28 +154,25 @@ internal fun AioChatScreen(controller: AioUiController) {
     val pagingMessages = controller.pagingMessages.collectAsLazyPagingItems()
 
     MiuixTheme(
-        controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.System) }
-    ) {
+        controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.System) }) {
         var showEmojiSheet by remember { mutableStateOf(false) }
+        var showPbDialog by remember { mutableStateOf(false) }
+        var pbJsonText by remember { mutableStateOf("") }
         var previewMessage by remember { mutableStateOf<AioMessage?>(null) }
         ApplyAioEdgeToEdge()
-        Scaffold(
-            topBar = {
-                AioTopBar(
-                    peer = uiState.peer,
-                    avatar = uiState.peerAvatar,
-                    controller = controller
-                )
-            },
-            bottomBar = {
-                AioInputBar(
-                    draft = uiState.draft,
-                    onDraftChanged = controller::updateDraft,
-                    onEmojiClick = { showEmojiSheet = true },
-                    onSendClick = controller::sendDraft
-                )
-            }
-        ) { padding ->
+        Scaffold(topBar = {
+            AioTopBar(
+                peer = uiState.peer, avatar = uiState.peerAvatar, controller = controller
+            )
+        }, bottomBar = {
+            AioInputBar(
+                draft = uiState.draft,
+                onDraftChanged = controller::updateDraft,
+                onEmojiClick = { showEmojiSheet = true },
+                onPbClick = { showPbDialog = true },
+                onSendClick = controller::sendDraft
+            )
+        }) { padding ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -210,12 +213,21 @@ internal fun AioChatScreen(controller: AioUiController) {
             onEmotionClick = { item ->
                 controller.clickEmotion(item)
                 showEmojiSheet = false
-            }
-        )
+            })
+        PbSendDialog(
+            show = showPbDialog,
+            text = pbJsonText,
+            onTextChange = { pbJsonText = it },
+            onDismissRequest = { showPbDialog = false },
+            onSendClick = {
+                val sent = controller.sendCustomPbMessage(pbJsonText)
+                pbJsonText = ""
+                if (sent) {
+                    showPbDialog = false
+                }
+            })
         AioMediaPreviewSheet(
-            message = previewMessage,
-            onDismissRequest = { previewMessage = null }
-        )
+            message = previewMessage, onDismissRequest = { previewMessage = null })
         AioLongPressMenuPopup(
             state = uiState.longPressMenu,
             onDismissRequest = controller::dismissLongPressMenu,
@@ -258,13 +270,11 @@ private fun ApplyAioEdgeToEdge() {
                 window.setDecorFitsSystemWindows(false)
                 window.insetsController?.setSystemBarsAppearance(
                     if (useLightSystemBars) {
-                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
                     } else {
                         0
                     },
-                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
                 )
             }
             val lightFlags = if (useLightSystemBars) {
@@ -273,13 +283,7 @@ private fun ApplyAioEdgeToEdge() {
                 0
             }
             window.decorView.systemUiVisibility =
-                (window.decorView.systemUiVisibility and
-                        (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
-                                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()) or
-                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                        lightFlags
+                (window.decorView.systemUiVisibility and (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()) or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or lightFlags
         }
 
         onDispose {
@@ -312,9 +316,7 @@ private tailrec fun Context.findActivity(): Activity? {
 
 @Composable
 private fun AioTopBar(
-    peer: AioPeer,
-    avatar: AvatarSpec?,
-    controller: AioUiController
+    peer: AioPeer, avatar: AvatarSpec?, controller: AioUiController
 ) {
     Column(
         modifier = Modifier
@@ -359,12 +361,13 @@ private fun AioTopBar(
                 )
                 Spacer(modifier = Modifier.width(9.dp))
                 AnimatedContent(
-                    targetState = peer.displayName,
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(150)) togetherWith
-                                fadeOut(animationSpec = tween(90))
-                    },
-                    label = "aioTitle"
+                    targetState = peer.displayName, transitionSpec = {
+                        fadeIn(animationSpec = tween(150)) togetherWith fadeOut(
+                            animationSpec = tween(
+                                90
+                            )
+                        )
+                    }, label = "aioTitle"
                 ) { title ->
                     Column(
                         modifier = Modifier.widthIn(max = 172.dp),
@@ -476,9 +479,9 @@ private fun AioMessageList(
 
     LaunchedEffect(messages.itemCount) {
         if (!didInitialScroll && messages.itemCount > 0) {
-            val restoredIndex = restoreMessageKey
-                ?.let { key -> snapshotMessages.indexOfFirst { it.key == key } }
-                ?.takeIf { it >= 0 }
+            val restoredIndex =
+                restoreMessageKey?.let { key -> snapshotMessages.indexOfFirst { it.key == key } }
+                    ?.takeIf { it >= 0 }
             if (restoredIndex != null) {
                 listState.scrollToItem(restoredIndex, restoreMessageOffset)
             } else {
@@ -522,9 +525,7 @@ private fun AioMessageList(
             listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
                 item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
             }?.key as? String
-        }
-            .distinctUntilChanged()
-            .collect(controller::syncHostListPosition)
+        }.distinctUntilChanged().collect(controller::syncHostListPosition)
     }
 
     LaunchedEffect(listState, didInitialScroll, messages.itemCount) {
@@ -535,11 +536,9 @@ private fun AioMessageList(
             }?.let { item ->
                 (item.key as? String) to item.offset
             }
+        }.distinctUntilChanged().collect { snapshot ->
+            controller.updateScrollSnapshot(snapshot?.first, snapshot?.second ?: 0)
         }
-            .distinctUntilChanged()
-            .collect { snapshot ->
-                controller.updateScrollSnapshot(snapshot?.first, snapshot?.second ?: 0)
-            }
     }
 
     LaunchedEffect(listState, didInitialScroll, messages.itemCount) {
@@ -550,37 +549,29 @@ private fun AioMessageList(
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset
             )
-        }
-            .distinctUntilChanged()
-            .collect { (scrolling, firstIndex, firstOffset) ->
-                if (scrolling && (firstIndex > 0 || firstOffset > 0)) {
-                    loadOlderArmed = true
-                }
+        }.distinctUntilChanged().collect { (scrolling, firstIndex, firstOffset) ->
+            if (scrolling && (firstIndex > 0 || firstOffset > 0)) {
+                loadOlderArmed = true
             }
+        }
     }
 
     LaunchedEffect(listState, messages.itemCount, loadingOlder, didInitialScroll, loadOlderArmed) {
         if (!didInitialScroll || messages.itemCount == 0) return@LaunchedEffect
         snapshotFlow {
-            listState.isScrollInProgress &&
-                    listState.firstVisibleItemIndex == 0 &&
-                    listState.firstVisibleItemScrollOffset == 0 &&
-                    listState.layoutInfo.totalItemsCount > listState.layoutInfo.visibleItemsInfo.size
-        }
-            .distinctUntilChanged()
-            .filter { it }
-            .collect {
-                if (loadOlderArmed && !loadingOlder) {
-                    val anchorItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
-                        item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
-                    }
-                    anchoredFirstMessageKey = anchorItem?.key as? String
-                        ?: snapshotMessages.firstOrNull()?.key
-                    anchoredFirstVisibleOffset = anchorItem?.offset ?: 0
-                    loadOlderArmed = false
-                    controller.loadOlderMessages()
+            listState.isScrollInProgress && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 && listState.layoutInfo.totalItemsCount > listState.layoutInfo.visibleItemsInfo.size
+        }.distinctUntilChanged().filter { it }.collect {
+            if (loadOlderArmed && !loadingOlder) {
+                val anchorItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
+                    item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
                 }
+                anchoredFirstMessageKey =
+                    anchorItem?.key as? String ?: snapshotMessages.firstOrNull()?.key
+                anchoredFirstVisibleOffset = anchorItem?.offset ?: 0
+                loadOlderArmed = false
+                controller.loadOlderMessages()
             }
+        }
     }
 
     LazyColumn(
@@ -593,9 +584,7 @@ private fun AioMessageList(
             LoadOlderIndicator(loadingOlder)
         }
         items(
-            count = messages.itemCount,
-            key = messages.itemKey { it.key }
-        ) { index ->
+            count = messages.itemCount, key = messages.itemKey { it.key }) { index ->
             messages[index]?.let { message ->
                 val previousMessage = if (index > 0) messages[index - 1] else null
                 AioMessageRow(
@@ -628,8 +617,7 @@ private fun LoadOlderIndicator(loading: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 InfiniteProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = MiuixTheme.colorScheme.primary
+                    modifier = Modifier.size(18.dp), color = MiuixTheme.colorScheme.primary
                 )
                 Text(
                     text = "加载更早消息",
@@ -657,7 +645,10 @@ private fun AioMessageRow(
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (shouldShowTimeDivider(message, previousMessage) && message.timeDividerText.isNotBlank()) {
+        if (shouldShowTimeDivider(
+                message, previousMessage
+            ) && message.timeDividerText.isNotBlank()
+        ) {
             MessageTimeDivider(message.timeDividerText)
         }
         Row(
@@ -727,23 +718,27 @@ private fun normalizeMessageEpochSeconds(value: Long): Long {
     return if (value > 100_000_000_000L) value / 1000L else value
 }
 
+private fun formatFullMessageEventTime(message: AioMessage): String {
+    val rawTime = when {
+        message.msgTime > 0L -> message.msgTime
+        message.sortTime > 0L -> message.sortTime
+        else -> 0L
+    }
+    if (rawTime <= 0L) return "时间未知"
+    val millis = if (rawTime > 100_000_000_000L) rawTime else rawTime * 1000L
+    return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(millis))
+}
+
 @Composable
 private fun MessageTypeCard(
-    message: AioMessage,
-    alignEnd: Boolean,
-    modifier: Modifier = Modifier
+    message: AioMessage, alignEnd: Boolean, modifier: Modifier = Modifier
 ) {
-    val idText = when {
-        message.msgId > 0L -> message.msgId.toString()
-        message.msgSeq > 0L -> message.msgSeq.toString()
-        else -> message.key
-    }
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start
-    ) {
+    val eventTimeText = formatFullMessageEventTime(message)
+    Box(modifier = modifier) {
         Box(
             modifier = Modifier
+                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart)
+                .widthIn(max = 292.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f))
                 .border(
@@ -754,7 +749,7 @@ private fun MessageTypeCard(
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
             Text(
-                text = "${message.renderKind.displayName}  ID $idText",
+                text = "${message.renderKind.displayName}  $eventTimeText",
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 fontSize = 10.sp,
                 maxLines = 1,
@@ -766,10 +761,7 @@ private fun MessageTypeCard(
 
 @Composable
 private fun MessageMetaLine(
-    name: String,
-    badges: List<AioMessageBadge>,
-    alignEnd: Boolean,
-    modifier: Modifier = Modifier
+    name: String, badges: List<AioMessageBadge>, alignEnd: Boolean, modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier,
@@ -838,63 +830,39 @@ private fun MessageBubble(
                 bubblePositionInWindow = coordinates.positionInWindow()
             }
             .pointerInput(message.key, bubblePositionInWindow) {
-                detectTapGestures(
-                    onTap = {
+                detectTapGestures(onTap = {
                     when (message.renderKind) {
-                        AioMessageKind.Image,
-                        AioMessageKind.Giphy -> onPreviewMessage(message)
+                        AioMessageKind.Image, AioMessageKind.Giphy -> onPreviewMessage(message)
 
                         else -> controller.clickMessage(message)
                     }
-                    },
-                    onLongPress = { pressOffset ->
-                        onLongPressMessage(
-                            message,
-                            IntOffset(
-                                x = (bubblePositionInWindow.x + pressOffset.x).roundToInt(),
-                                y = (bubblePositionInWindow.y + pressOffset.y).roundToInt()
-                            )
+                }, onLongPress = { pressOffset ->
+                    onLongPressMessage(
+                        message, IntOffset(
+                            x = (bubblePositionInWindow.x + pressOffset.x).roundToInt(),
+                            y = (bubblePositionInWindow.y + pressOffset.y).roundToInt()
                         )
-                    }
-                )
-            }
-    ) {
+                    )
+                })
+            }) {
         Column(modifier = Modifier.padding(10.dp)) {
             when (message.renderKind) {
                 AioMessageKind.Text -> TextMessageContent(message, contentColor)
                 AioMessageKind.Call -> CallMessageContent(message, contentColor)
-                AioMessageKind.Image,
-                AioMessageKind.Giphy -> ImageMessageContent(
-                    message,
-                    contentColor
+                AioMessageKind.Image, AioMessageKind.Giphy -> ImageMessageContent(
+                    message, contentColor
                 )
 
                 AioMessageKind.Video -> VideoMessageContent(
-                    message,
-                    renderRevision,
-                    controller,
-                    contentColor
+                    message, renderRevision, controller, contentColor
                 )
 
                 AioMessageKind.Voice -> VoiceMessageContent(message, contentColor)
                 AioMessageKind.File -> FileMessageContent(message, contentColor)
                 AioMessageKind.MultiMsgForward -> MultiForwardMessageContent(message, contentColor)
+                AioMessageKind.Wallet -> WalletMessageContent(message, contentColor)
                 AioMessageKind.ArkStruct -> ArkMessageContent(message, contentColor)
-                AioMessageKind.Unsupported,
-                AioMessageKind.Unknown,
-                AioMessageKind.Null,
-                AioMessageKind.Mix,
-                AioMessageKind.Struct,
-                AioMessageKind.Reply,
-                AioMessageKind.Wallet,
-                AioMessageKind.StructLongMsg,
-                AioMessageKind.Gift,
-                AioMessageKind.TextGift,
-                AioMessageKind.OnlineFile,
-                AioMessageKind.FaceBubble,
-                AioMessageKind.ShareLocation,
-                AioMessageKind.OnlineFolder,
-                AioMessageKind.Prologue -> UnsupportedMessageContent(
+                AioMessageKind.Unsupported, AioMessageKind.Unknown, AioMessageKind.Null, AioMessageKind.Mix, AioMessageKind.Struct, AioMessageKind.Reply, AioMessageKind.StructLongMsg, AioMessageKind.Gift, AioMessageKind.TextGift, AioMessageKind.OnlineFile, AioMessageKind.FaceBubble, AioMessageKind.ShareLocation, AioMessageKind.OnlineFolder, AioMessageKind.Prologue -> UnsupportedMessageContent(
                     message = message,
                     renderRevision = renderRevision,
                     controller = controller,
@@ -954,8 +922,7 @@ private fun TextMessageContent(message: AioMessage, contentColor: Color) {
 
 @Composable
 private fun ImageMessageContent(
-    message: AioMessage,
-    contentColor: Color
+    message: AioMessage, contentColor: Color
 ) {
     val media = message.media
     ImagePreviewFrame(
@@ -977,10 +944,7 @@ private fun ImageMessageContent(
 
 @Composable
 private fun VideoMessageContent(
-    message: AioMessage,
-    renderRevision: Long,
-    controller: AioUiController,
-    contentColor: Color
+    message: AioMessage, renderRevision: Long, controller: AioUiController, contentColor: Color
 ) {
     val media = message.media
     Box(
@@ -1009,8 +973,7 @@ private fun VideoMessageContent(
                 .align(Alignment.Center)
                 .size(46.dp)
                 .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.48f)),
-            contentAlignment = Alignment.Center
+                .background(Color.Black.copy(alpha = 0.48f)), contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Filled.PlayArrow,
@@ -1072,8 +1035,7 @@ private fun HostMessagePreview(
 
 @Composable
 private fun HostMessagePreviewCanvas(
-    source: View,
-    modifier: Modifier = Modifier
+    source: View, modifier: Modifier = Modifier
 ) {
     var frameTick by remember(source) { mutableIntStateOf(0) }
     LaunchedEffect(source) {
@@ -1089,8 +1051,7 @@ private fun HostMessagePreviewCanvas(
         if (sourceWidth <= 0 || sourceHeight <= 0) return@Canvas
 
         val scale = maxOf(
-            size.width / sourceWidth.toFloat(),
-            size.height / sourceHeight.toFloat()
+            size.width / sourceWidth.toFloat(), size.height / sourceHeight.toFloat()
         )
         drawIntoCanvas { canvas ->
             val nativeCanvas = canvas.nativeCanvas
@@ -1108,10 +1069,7 @@ private fun HostMessagePreviewCanvas(
 
 @Composable
 private fun rememberHostMessagePreviewView(
-    message: AioMessage,
-    renderRevision: Long,
-    controller: AioUiController,
-    context: Context
+    message: AioMessage, renderRevision: Long, controller: AioUiController, context: Context
 ): View? {
     return remember(message.key, message.renderKind, message.media, renderRevision) {
         controller.createHostMessagePreviewView(context, message)
@@ -1120,8 +1078,7 @@ private fun rememberHostMessagePreviewView(
 
 @Composable
 private fun AioMediaPreviewSheet(
-    message: AioMessage?,
-    onDismissRequest: () -> Unit
+    message: AioMessage?, onDismissRequest: () -> Unit
 ) {
     if (message == null || message.renderKind == AioMessageKind.Video) return
     val media = message.media ?: return
@@ -1169,8 +1126,7 @@ private fun AioImagePreviewContent(message: AioMessage, media: AioMediaSpec) {
     val preloadPainter = rememberAsyncImagePainter(model = request)
     val imageState by preloadPainter.state.collectAsState()
     Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
     ) {
         when (imageState) {
             is AsyncImagePainter.State.Success -> {
@@ -1184,16 +1140,13 @@ private fun AioImagePreviewContent(message: AioMessage, media: AioMediaSpec) {
 
             is AsyncImagePainter.State.Error -> {
                 Text(
-                    text = "图片加载失败",
-                    color = Color.White,
-                    fontSize = 13.sp
+                    text = "图片加载失败", color = Color.White, fontSize = 13.sp
                 )
             }
 
             else -> {
                 InfiniteProgressIndicator(
-                    modifier = Modifier.size(28.dp),
-                    color = Color.White
+                    modifier = Modifier.size(28.dp), color = Color.White
                 )
             }
         }
@@ -1206,8 +1159,7 @@ private fun AioVideoPreviewContent(media: AioMediaSpec) {
     val uri = remember(source) { source.toPreviewUri() } ?: return
     var isPlaying by remember(source) { mutableStateOf(true) }
     Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
     ) {
         AndroidView(
             factory = { ctx ->
@@ -1230,8 +1182,7 @@ private fun AioVideoPreviewContent(media: AioMediaSpec) {
                         }
                     }
                 }
-            },
-            update = { view ->
+            }, update = { view ->
                 if (view.tag != uri.toString()) {
                     view.tag = uri.toString()
                     view.setVideoURI(uri)
@@ -1243,8 +1194,7 @@ private fun AioVideoPreviewContent(media: AioMediaSpec) {
                 } else if (view.isPlaying) {
                     view.pause()
                 }
-            },
-            modifier = Modifier.fillMaxSize()
+            }, modifier = Modifier.fillMaxSize()
         )
         if (!isPlaying) {
             Box(
@@ -1283,14 +1233,12 @@ private fun ArkMessageContent(message: AioMessage, contentColor: Color) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
-            Text(
-                text = preview?.title?.ifBlank { "卡片消息" } ?: "卡片消息",
+            Text(text = preview?.title?.ifBlank { "卡片消息" } ?: "卡片消息",
                 color = contentColor,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+                overflow = TextOverflow.Ellipsis)
         }
         preview?.desc?.takeIf { it.isNotBlank() }?.let { desc ->
             Text(
@@ -1323,8 +1271,7 @@ private fun ArkMessageContent(message: AioMessage, contentColor: Color) {
                 .background(contentColor.copy(alpha = 0.14f))
         )
         Row(
-            modifier = Modifier.padding(top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
@@ -1356,14 +1303,12 @@ private fun ArkMessageContent(message: AioMessage, contentColor: Color) {
 private fun MultiForwardMessageContent(message: AioMessage, contentColor: Color) {
     val preview = message.forwardPreview
     Column(modifier = Modifier.widthIn(min = 180.dp, max = 260.dp)) {
-        Text(
-            text = preview?.header?.ifBlank { "合并转发" } ?: "合并转发",
+        Text(text = preview?.header?.ifBlank { "合并转发" } ?: "合并转发",
             color = contentColor,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+            overflow = TextOverflow.Ellipsis)
         Box(
             modifier = Modifier
                 .padding(top = 8.dp, bottom = 8.dp)
@@ -1399,29 +1344,22 @@ private fun MultiForwardMessageContent(message: AioMessage, contentColor: Color)
                 .height(0.5.dp)
                 .background(contentColor.copy(alpha = 0.14f))
         )
-        Text(
-            text = preview?.footer?.ifBlank {
-                preview.count.takeIf { it > 0 }?.let { "查看${it}条转发消息" } ?: "合并转发"
-            } ?: "合并转发",
+        Text(text = preview?.footer?.ifBlank {
+            preview.count.takeIf { it > 0 }?.let { "查看${it}条转发消息" } ?: "合并转发"
+        } ?: "合并转发",
             color = contentColor.copy(alpha = 0.56f),
             style = MiuixTheme.textStyles.body2,
-            fontSize = 11.sp
-        )
+            fontSize = 11.sp)
     }
 }
 
 @Composable
 private fun UnsupportedMessageContent(
-    message: AioMessage,
-    renderRevision: Long,
-    controller: AioUiController,
-    contentColor: Color
+    message: AioMessage, renderRevision: Long, controller: AioUiController, contentColor: Color
 ) {
     Column {
         Text(
-            text = message.text,
-            color = contentColor.copy(alpha = 0.82f),
-            fontSize = 14.sp
+            text = message.text, color = contentColor.copy(alpha = 0.82f), fontSize = 14.sp
         )
         Text(
             text = buildString {
@@ -1441,6 +1379,65 @@ private fun UnsupportedMessageContent(
 }
 
 @Composable
+private fun WalletMessageContent(message: AioMessage, contentColor: Color) {
+    val preview = message.walletPreview
+    Column(modifier = Modifier.widthIn(min = 180.dp, max = 240.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFFFFD7A8)), contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "¥",
+                    color = Color(0xFF9A3C00),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = preview?.sourceName?.ifBlank { "QQ红包" } ?: "QQ红包",
+                color = contentColor.copy(alpha = 0.92f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis)
+        }
+        Text(text = preview?.title?.ifBlank { "QQ红包" } ?: "QQ红包",
+            color = contentColor,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 8.dp))
+        preview?.desc?.takeIf { it.isNotBlank() }?.let { desc ->
+            Text(
+                text = desc,
+                color = contentColor.copy(alpha = 0.74f),
+                fontSize = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(contentColor.copy(alpha = 0.14f))
+        )
+        Text(
+            text = "仅支持查看，暂不可领取",
+            color = contentColor.copy(alpha = 0.62f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+@Composable
 private fun CallMessageContent(message: AioMessage, contentColor: Color) {
     val isVideoCall = message.text.contains("视频通话")
     val icon = if (isVideoCall) {
@@ -1448,9 +1445,7 @@ private fun CallMessageContent(message: AioMessage, contentColor: Color) {
     } else {
         Icons.Filled.Mic
     }
-    val statusText = message.text
-        .removePrefix(if (isVideoCall) "视频通话" else "语音通话")
-        .trim()
+    val statusText = message.text.removePrefix(if (isVideoCall) "视频通话" else "语音通话").trim()
         .ifBlank { if (isVideoCall) "视频通话" else "语音通话" }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
@@ -1477,14 +1472,12 @@ private fun VoiceMessageContent(message: AioMessage, contentColor: Color) {
             tint = contentColor,
             modifier = Modifier.size(22.dp)
         )
-        Text(
-            text = message.media?.durationSeconds?.takeIf { it > 0 }?.let {
-                "${it}s"
-            } ?: message.text,
+        Text(text = message.media?.durationSeconds?.takeIf { it > 0 }?.let {
+            "${it}s"
+        } ?: message.text,
             color = contentColor,
             fontSize = 15.sp,
-            modifier = Modifier.padding(start = 8.dp)
-        )
+            modifier = Modifier.padding(start = 8.dp))
     }
 }
 
@@ -1498,14 +1491,12 @@ private fun FileMessageContent(message: AioMessage, contentColor: Color) {
             modifier = Modifier.size(24.dp)
         )
         Column(modifier = Modifier.padding(start = 9.dp)) {
-            Text(
-                text = message.media?.fileName?.takeIf { it.isNotBlank() } ?: message.text,
+            Text(text = message.media?.fileName?.takeIf { it.isNotBlank() } ?: message.text,
                 color = contentColor,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+                overflow = TextOverflow.Ellipsis)
             message.media?.fileSize?.takeIf { it > 0L }?.let {
                 Text(
                     text = formatFileSize(it),
@@ -1519,9 +1510,7 @@ private fun FileMessageContent(message: AioMessage, contentColor: Color) {
 
 @Composable
 private fun ImagePreviewFrame(
-    message: AioMessage,
-    media: AioMediaSpec?,
-    modifier: Modifier = Modifier
+    message: AioMessage, media: AioMediaSpec?, modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
@@ -1584,8 +1573,7 @@ private fun MediaPreviewFrame(
 @Composable
 private fun TipMessage(text: String) {
     Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center
+        modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
@@ -1607,6 +1595,7 @@ private fun AioInputBar(
     draft: String,
     onDraftChanged: (String) -> Unit,
     onEmojiClick: () -> Unit,
+    onPbClick: () -> Unit,
     onSendClick: () -> Unit
 ) {
     Row(
@@ -1618,12 +1607,16 @@ private fun AioInputBar(
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Bottom
     ) {
-        IconButton(
-            onClick = onEmojiClick,
-            minWidth = 44.dp,
-            minHeight = 44.dp,
-            cornerRadius = 22.dp,
-            backgroundColor = MiuixTheme.colorScheme.surfaceVariant
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(MiuixTheme.colorScheme.surfaceVariant)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onEmojiClick,
+                    onLongClick = {}), contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Filled.EmojiEmotions,
@@ -1632,12 +1625,27 @@ private fun AioInputBar(
                 modifier = Modifier.size(22.dp)
             )
         }
+        IconButton(
+            onClick = onPbClick,
+            minWidth = 44.dp,
+            minHeight = 44.dp,
+            cornerRadius = 22.dp,
+            backgroundColor = MiuixTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.padding(start = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.DataObject,
+                contentDescription = "ProtoBuf",
+                tint = MiuixTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp)
+            )
+        }
         TextField(
             value = draft,
             onValueChange = onDraftChanged,
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 8.dp)
+                .padding(start = 8.dp, end = 8.dp)
                 .heightIn(min = 44.dp, max = 112.dp),
             insideMargin = DpSize(13.dp, 10.dp),
             cornerRadius = 22.dp,
@@ -1671,10 +1679,67 @@ private fun AioInputBar(
 }
 
 @Composable
-private fun AioLongPressMenuPopup(
-    state: AioLongPressMenuState?,
+private fun PbSendDialog(
+    show: Boolean,
+    text: String,
+    onTextChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    onSelectIndex: (Int) -> Unit
+    onSendClick: () -> Unit
+) {
+    WindowDialog(
+        title = "ProtoBuf 发包",
+        summary = "输入 PbSendMsg 的内层 element JSON",
+        show = show,
+        onDismissRequest = onDismissRequest
+    ) {
+        val dismiss = LocalDismissState.current
+        val isEnabled = text.isNotBlank()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            TextField(
+                value = text,
+                onValueChange = onTextChange,
+                label = "Pb JSON",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 280.dp),
+                singleLine = false,
+                minLines = 5,
+                maxLines = 12
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TextButton(
+                    text = "取消", onClick = { dismiss?.invoke() }, modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = onSendClick,
+                    enabled = isEnabled,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColorsPrimary()
+                ) {
+                    Text(
+                        text = "发送 ProtoBuf", color = if (isEnabled) {
+                            MiuixTheme.colorScheme.onPrimary
+                        } else {
+                            MiuixTheme.colorScheme.disabledOnPrimary
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AioLongPressMenuPopup(
+    state: AioLongPressMenuState?, onDismissRequest: () -> Unit, onSelectIndex: (Int) -> Unit
 ) {
     if (state == null || state.items.isEmpty()) return
     val popupPositionProvider = remember(state.anchorX, state.anchorY) {
@@ -1692,12 +1757,11 @@ private fun AioLongPressMenuPopup(
                 return IntOffset(
                     x = rawX.coerceIn(
                         windowBounds.left,
-                        (windowBounds.right - popupContentSize.width - popupMargin.right)
-                            .coerceAtLeast(windowBounds.left)
-                    ),
-                    y = rawY.coerceIn(
-                        (windowBounds.top + popupMargin.top)
-                            .coerceAtMost(windowBounds.bottom - popupContentSize.height - popupMargin.bottom),
+                        (windowBounds.right - popupContentSize.width - popupMargin.right).coerceAtLeast(
+                            windowBounds.left
+                        )
+                    ), y = rawY.coerceIn(
+                        (windowBounds.top + popupMargin.top).coerceAtMost(windowBounds.bottom - popupContentSize.height - popupMargin.bottom),
                         windowBounds.bottom - popupContentSize.height - popupMargin.bottom
                     )
                 )
@@ -1723,8 +1787,7 @@ private fun AioLongPressMenuPopup(
                     index = index,
                     onSelectedIndexChange = {
                         onSelectIndex(index)
-                    }
-                )
+                    })
             }
         }
     }
@@ -1746,10 +1809,7 @@ private fun AioEmojiSheet(
     val maxGridHeight = (maxSheetHeight - 88.dp).coerceAtLeast(160.dp)
 
     WindowBottomSheet(
-        show = show,
-        title = "表情",
-        enableNestedScroll = true,
-        endAction = {
+        show = show, title = "表情", enableNestedScroll = true, endAction = {
             val dismiss = LocalDismissState.current
             IconButton(onClick = { dismiss?.invoke() }) {
                 Icon(
@@ -1758,8 +1818,7 @@ private fun AioEmojiSheet(
                     tint = MiuixTheme.colorScheme.onBackground,
                 )
             }
-        },
-        onDismissRequest = onDismissRequest
+        }, onDismissRequest = onDismissRequest
     ) {
         val visibleCategories = if (categories.isNotEmpty()) {
             categories
@@ -1783,8 +1842,7 @@ private fun AioEmojiSheet(
             TabRowWithContour(
                 tabs = tabs,
                 selectedTabIndex = selectedTabIndex,
-                onTabSelected = { selectedTabIndex = it }
-            )
+                onTabSelected = { selectedTabIndex = it })
             val category =
                 visibleCategories.getOrNull(selectedTabIndex) ?: visibleCategories.first()
             Box(
@@ -1835,19 +1893,14 @@ private fun AioEmojiCategoryGrid(
     ) {
         gridItems(visibleItems, key = { it.key }) { item ->
             AioEmojiCategoryItem(
-                item = item,
-                controller = controller,
-                onClick = { onEmotionClick(item) }
-            )
+                item = item, controller = controller, onClick = { onEmotionClick(item) })
         }
     }
 }
 
 @Composable
 private fun AioEmojiCategoryItem(
-    item: AioEmotionItem,
-    controller: AioUiController,
-    onClick: () -> Unit
+    item: AioEmotionItem, controller: AioUiController, onClick: () -> Unit
 ) {
     LaunchedEffect(item.key, item.displayPathForPreview()) {
         controller.ensureEmotionPreview(item)
@@ -1859,15 +1912,12 @@ private fun AioEmojiCategoryItem(
             .clip(RoundedCornerShape(16.dp))
             .background(MiuixTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
-            .padding(10.dp),
-        contentAlignment = Alignment.Center
+            .padding(10.dp), contentAlignment = Alignment.Center
     ) {
         when {
             item.kind == AioEmotionKind.System -> {
                 SystemEmotionPreview(
-                    item = item,
-                    controller = controller,
-                    modifier = Modifier.fillMaxSize()
+                    item = item, controller = controller, modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -1903,9 +1953,7 @@ private fun AioEmojiCategoryItem(
 
 @Composable
 private fun AioEmotionSheetState(
-    text: String,
-    loading: Boolean,
-    modifier: Modifier = Modifier
+    text: String, loading: Boolean, modifier: Modifier = Modifier
 ) {
     Column(
         modifier = Modifier
@@ -1917,8 +1965,7 @@ private fun AioEmotionSheetState(
     ) {
         if (loading) {
             InfiniteProgressIndicator(
-                modifier = Modifier.size(22.dp),
-                color = MiuixTheme.colorScheme.primary
+                modifier = Modifier.size(22.dp), color = MiuixTheme.colorScheme.primary
             )
         }
         Text(
@@ -1948,8 +1995,7 @@ private fun AioAvatar(
             .border(1.dp, MiuixTheme.colorScheme.outline.copy(alpha = 0.18f), CircleShape)
             .combinedClickable(
                 onClick = { message?.let(controller::clickAvatar) },
-                onLongClick = { message?.let(controller::longClickMessage) }
-            ),
+                onLongClick = { message?.let(controller::longClickMessage) }),
         contentAlignment = Alignment.Center
     ) {
         if (useHostAvatar && spec != null && (spec.uid.isNotBlank() || spec.uin > 0L)) {
@@ -1982,8 +2028,7 @@ private fun AioLoading() {
         verticalArrangement = Arrangement.Center
     ) {
         InfiniteProgressIndicator(
-            modifier = Modifier.size(28.dp),
-            color = MiuixTheme.colorScheme.primary
+            modifier = Modifier.size(28.dp), color = MiuixTheme.colorScheme.primary
         )
         Text(
             text = "正在加载聊天",
@@ -2048,10 +2093,7 @@ private fun rememberAioImageRequest(value: String, cacheKeyPrefix: String): Imag
     val model = imageModel(value) ?: return null
     val cacheKey = remember(model, cacheKeyPrefix) { "aio:$cacheKeyPrefix:$model" }
     return remember(context, model, cacheKey) {
-        ImageRequest.Builder(context)
-            .data(model)
-            .memoryCacheKey(cacheKey)
-            .diskCacheKey(cacheKey)
+        ImageRequest.Builder(context).data(model).memoryCacheKey(cacheKey).diskCacheKey(cacheKey)
             .build()
     }
 }
@@ -2060,8 +2102,10 @@ private fun imageModel(value: String?): Any? {
     val normalized = value?.takeIf { it.isNotBlank() } ?: return null
     return when {
         normalized.startsWith("/") -> File(normalized).takeIf { it.exists() }
-        normalized.startsWith("file://", ignoreCase = true) ||
-                normalized.startsWith("content://", ignoreCase = true) -> normalized
+        normalized.startsWith("file://", ignoreCase = true) || normalized.startsWith(
+            "content://",
+            ignoreCase = true
+        ) -> normalized
 
         else -> normalizeImageUrl(normalized)
     }
@@ -2069,9 +2113,7 @@ private fun imageModel(value: String?): Any? {
 
 @Composable
 private fun SystemEmotionPreview(
-    item: AioEmotionItem,
-    controller: AioUiController,
-    modifier: Modifier = Modifier
+    item: AioEmotionItem, controller: AioUiController, modifier: Modifier = Modifier
 ) {
     val drawable = remember(item.key) { controller.getEmotionPreviewDrawable(item) }
     val bitmap = remember(drawable) { drawable?.toPreviewBitmap() }
@@ -2096,10 +2138,13 @@ private fun SystemEmotionPreview(
 private fun String.toPreviewUri(): Uri? {
     val normalized = trim().takeIf { it.isNotBlank() } ?: return null
     return when {
-        normalized.startsWith("content://", ignoreCase = true) ||
-                normalized.startsWith("file://", ignoreCase = true) ||
-                normalized.startsWith("http://", ignoreCase = true) ||
-                normalized.startsWith("https://", ignoreCase = true) -> Uri.parse(normalized)
+        normalized.startsWith("content://", ignoreCase = true) || normalized.startsWith(
+            "file://",
+            ignoreCase = true
+        ) || normalized.startsWith(
+            "http://",
+            ignoreCase = true
+        ) || normalized.startsWith("https://", ignoreCase = true) -> Uri.parse(normalized)
 
         normalized.startsWith("/") -> Uri.fromFile(File(normalized))
         else -> Uri.parse(normalized)
@@ -2133,10 +2178,10 @@ private fun AioMediaSpec?.displayPathForPlayback(): String? {
 
 private fun String?.takeUsableMediaPath(): String? {
     this?.trim()?.takeIf(String::isNotBlank)?.let { path ->
-        if (!path.startsWith("/") ||
-            path.startsWith("file://", ignoreCase = true) ||
-            path.startsWith("content://", ignoreCase = true) ||
-            File(path).exists()
+        if (!path.startsWith("/") || path.startsWith(
+                "file://",
+                ignoreCase = true
+            ) || path.startsWith("content://", ignoreCase = true) || File(path).exists()
         ) {
             return path
         }
@@ -2146,19 +2191,19 @@ private fun String?.takeUsableMediaPath(): String? {
 
 private fun AioEmotionItem.displayPathForPreview(): String? {
     localPath?.trim()?.takeIf(String::isNotBlank)?.let { path ->
-        if (!path.startsWith("/") ||
-            path.startsWith("file://", ignoreCase = true) ||
-            path.startsWith("content://", ignoreCase = true) ||
-            File(path).exists()
+        if (!path.startsWith("/") || path.startsWith(
+                "file://",
+                ignoreCase = true
+            ) || path.startsWith("content://", ignoreCase = true) || File(path).exists()
         ) {
             return path
         }
     }
     resultPath?.trim()?.takeIf(String::isNotBlank)?.let { path ->
-        if (!path.startsWith("/") ||
-            path.startsWith("file://", ignoreCase = true) ||
-            path.startsWith("content://", ignoreCase = true) ||
-            File(path).exists()
+        if (!path.startsWith("/") || path.startsWith(
+                "file://",
+                ignoreCase = true
+            ) || path.startsWith("content://", ignoreCase = true) || File(path).exists()
         ) {
             return path
         }
@@ -2169,8 +2214,10 @@ private fun AioEmotionItem.displayPathForPreview(): String? {
 private fun normalizeImageUrl(value: String?): String? {
     val url = value?.trim()?.takeIf(String::isNotBlank) ?: return null
     return when {
-        url.startsWith("http://", ignoreCase = true) ||
-                url.startsWith("https://", ignoreCase = true) -> url
+        url.startsWith("http://", ignoreCase = true) || url.startsWith(
+            "https://",
+            ignoreCase = true
+        ) -> url
 
         url.startsWith("//") -> "https:$url"
         url.contains('.') && !url.startsWith("/") -> "https://$url"
@@ -2187,8 +2234,10 @@ private fun Drawable.toPreviewBitmap(): android.graphics.Bitmap? {
 private fun String?.takeUsableRemoteUrl(): String? {
     val url = this?.trim()?.takeIf(String::isNotBlank) ?: return null
     return when {
-        url.startsWith("http://", ignoreCase = true) ||
-                url.startsWith("https://", ignoreCase = true) -> url
+        url.startsWith("http://", ignoreCase = true) || url.startsWith(
+            "https://",
+            ignoreCase = true
+        ) -> url
 
         url.startsWith("//") -> "https:$url"
         else -> null

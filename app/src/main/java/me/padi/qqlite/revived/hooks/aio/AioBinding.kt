@@ -283,6 +283,14 @@ internal class AioBinding(
         }
     }
 
+    override fun sendCustomPbMessage(json: String): Boolean {
+        return runCatching {
+            hookState.sendCustomPbMessage(currentState.peer, json)
+        }.onFailure {
+            module.logHook(Log.WARN, "AIO compose custom PbSendMsg failed", it)
+        }.getOrDefault(false)
+    }
+
     override fun requestEmotionCategories() {
         if (emotionLoadStarted && currentState.emotionCategories.isNotEmpty()) {
             return
@@ -419,6 +427,13 @@ internal class AioBinding(
     override fun clickMessage(message: AioMessage) {
         val itemView = messageViewRefs[message.key]?.get()
         when (message.renderKind) {
+            AioMessageKind.Wallet -> {
+                val handled = hookState.clickWalletMessage(currentState.peer, message)
+                if (!handled) {
+                    itemView.performBestClick()
+                }
+            }
+
             AioMessageKind.Voice -> {
                 if (!message.isVoicePlayable()) {
                     pendingVoiceAutoPlayKeys += message.key
@@ -1142,6 +1157,9 @@ private fun AioMessage.sameUi(other: AioMessage): Boolean {
         badges == other.badges &&
         showTimeDivider == other.showTimeDivider &&
         timeDividerText == other.timeDividerText &&
+        forwardPreview == other.forwardPreview &&
+        arkPreview == other.arkPreview &&
+        walletPreview == other.walletPreview &&
         media == other.media &&
         avatar?.stableKey() == other.avatar?.stableKey()
 }

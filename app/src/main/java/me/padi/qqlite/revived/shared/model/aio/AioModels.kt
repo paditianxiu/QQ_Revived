@@ -65,6 +65,22 @@ data class AioArkPreview(
     val rawBytesData: String = ""
 )
 
+data class AioWalletPreview(
+    val title: String = "",
+    val desc: String = "",
+    val sourceName: String = "QQ红包",
+    val brief: String = "",
+    val redId: String = "",
+    val authKey: String = "",
+    val nativeUrl: String = "",
+    val channel: Int = 0,
+    val sessionType: Int = 0,
+    val walletMsgType: Int = 0,
+    val redType: Int = 0,
+    val grabState: Int = 0,
+    val extraToken: String = ""
+)
+
 data class AioMessage(
     val key: String,
     val msgId: Long,
@@ -83,6 +99,7 @@ data class AioMessage(
     val timeDividerText: String = "",
     val forwardPreview: AioForwardPreview? = null,
     val arkPreview: AioArkPreview? = null,
+    val walletPreview: AioWalletPreview? = null,
     val media: AioMediaSpec? = null,
     val avatar: AvatarSpec? = null,
     val itemViewRef: WeakReference<View>? = null

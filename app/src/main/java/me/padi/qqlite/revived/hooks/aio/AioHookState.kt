@@ -1,15 +1,17 @@
 package me.padi.qqlite.revived.hooks.aio
 
 import android.content.Context
+import android.os.Bundle
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
-import android.os.Bundle
+import android.net.Uri
 import android.util.AttributeSet
 import android.util.Log
 import android.view.View
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.Toast
 import android.widget.TextView
 import me.padi.qqlite.revived.hooks.common.findTargetClass
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
@@ -22,7 +24,9 @@ import me.padi.qqlite.revived.shared.model.aio.AioMessage
 import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
+import me.padi.qqlite.revived.shared.model.aio.AioWalletPreview
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.lang.ref.WeakReference
@@ -32,6 +36,8 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.text.DateFormat
 import java.util.Date
+import java.util.IdentityHashMap
+import kotlin.random.Random
 
 internal data class AioHookState(
     val classLoader: ClassLoader,
@@ -110,6 +116,7 @@ internal data class AioHookState(
     val picElementGetter: Method,
     val arkElementGetter: Method,
     val multiForwardElementGetter: Method,
+    val walletElementGetter: Method,
     val avRecordElementGetter: Method,
     val videoElementGetter: Method,
     val pttElementGetter: Method,
@@ -218,6 +225,9 @@ internal data class AioHookState(
             val parsed = parseElements(msgRecord)
             val rawKind = parsed.rawKind.takeIf { it != AioMessageKind.Unsupported }
                 ?: AioMessageKind.fromMsgType(msgType)
+            if (shouldDebugWallet(rawKind, parsed.text)) {
+                debugLogWalletRecord(msgRecord)
+            }
             val hostTipText = if (parsed.renderKind == AioMessageKind.Tip) {
                 readHostGrayTipText(data)
             } else {
@@ -245,6 +255,7 @@ internal data class AioHookState(
                 timeDividerText = formatTimeDividerText(msgTime),
                 forwardPreview = parsed.forwardPreview,
                 arkPreview = parsed.arkPreview,
+                walletPreview = parsed.walletPreview,
                 media = parsed.media,
                 avatar = senderAvatar(senderUid, senderUin, hostFragment),
                 itemViewRef = itemView?.let { WeakReference(it) }
@@ -1149,6 +1160,7 @@ internal data class AioHookState(
         var rawKind = AioMessageKind.Unsupported
         var forwardPreview: AioForwardPreview? = null
         var arkPreview: AioArkPreview? = null
+        var walletPreview: AioWalletPreview? = null
         var hasTip = false
 
         elements.filterNotNull().forEach { element ->
@@ -1171,6 +1183,13 @@ internal data class AioHookState(
                 forwardPreview = preview
                 preview.items.takeIf { it.isNotEmpty() }?.let(textParts::addAll)
                 renderKind = AioMessageKind.MultiMsgForward
+            }
+            walletElementGetter.invokeAny(element)?.let { wallet ->
+                val preview = parseWalletElement(wallet)
+                walletPreview = preview
+                preview.title.takeIf { it.isNotBlank() }?.let(textParts::add)
+                preview.desc.takeIf { it.isNotBlank() }?.let(textParts::add)
+                renderKind = AioMessageKind.Wallet
             }
             avRecordElementGetter.invokeAny(element)?.let { avRecord ->
                 parseAvRecordText(avRecord).takeIf { it.isNotBlank() }?.let(textParts::add)
@@ -1208,20 +1227,538 @@ internal data class AioHookState(
         }
 
         if (renderKind == AioMessageKind.Unsupported) {
+            val mergedText = textParts.joinToString("")
             renderKind = when {
+                rawKind == AioMessageKind.Wallet -> AioMessageKind.Wallet
+                looksLikeWalletFallback(mergedText) -> AioMessageKind.Wallet
                 textParts.isNotEmpty() -> AioMessageKind.Text
                 hasTip -> AioMessageKind.Tip
                 else -> AioMessageKind.Unsupported
             }
         }
+        val mergedText = textParts.joinToString("")
+        if (renderKind == AioMessageKind.Text &&
+            (rawKind == AioMessageKind.Wallet || looksLikeWalletFallback(mergedText))
+        ) {
+            renderKind = AioMessageKind.Wallet
+        }
+        if (renderKind == AioMessageKind.Wallet) {
+            walletPreview = parseWalletPreview(mergedText)
+        }
         return ParsedMessage(
             renderKind = renderKind,
             rawKind = rawKind,
-            text = textParts.joinToString(""),
+            text = mergedText,
             media = media,
             forwardPreview = forwardPreview,
-            arkPreview = arkPreview
+            arkPreview = arkPreview,
+            walletPreview = walletPreview
         )
+    }
+
+    private fun parseWalletPreview(text: String): AioWalletPreview {
+        val brief = text.trim()
+        val normalized = brief.removePrefix("[QQ红包]").trim()
+        val title = when {
+            normalized.isBlank() -> "QQ红包"
+            normalized.contains("请使用新版手机QQ") || normalized.contains("查收红包") -> "QQ红包"
+            else -> normalized.lineSequence().firstOrNull().orEmpty().ifBlank { "QQ红包" }
+        }
+        val desc = when {
+            normalized.isBlank() -> "点击查看红包"
+            normalized.contains("请使用新版手机QQ") || normalized.contains("查收红包") -> normalized
+            normalized == title -> "赶紧点击拆开吧"
+            else -> normalized
+        }
+        val redId = RED_PACKET_ID_REGEX.find(brief)?.groupValues?.getOrNull(1).orEmpty()
+        return AioWalletPreview(
+            title = title,
+            desc = desc,
+            brief = brief,
+            redId = redId
+        )
+    }
+
+    private fun parseWalletElement(wallet: Any): AioWalletPreview {
+        val receiver = wallet.findFieldValue("receiver") ?: wallet.findFieldValue("sender") ?: wallet
+        val title = receiver.findFieldValue("title")?.toString().orEmpty()
+        val subTitle = receiver.findFieldValue("subTitle")?.toString().orEmpty()
+        val content = receiver.findFieldValue("content")?.toString().orEmpty()
+        val notice = receiver.findFieldValue("notice")?.toString().orEmpty()
+        val nativeAndroid = receiver.findFieldValue("nativeAndroid")?.toString().orEmpty()
+        val billNo = wallet.findFieldValue("billNo")?.toString().orEmpty()
+        val redId = billNo.ifBlank {
+            nativeAndroid.takeIf { it.startsWith("red?id=") }?.removePrefix("red?id=").orEmpty()
+        }
+        return AioWalletPreview(
+            title = title.ifBlank { "QQ红包" },
+            desc = subTitle.ifBlank { notice.removePrefix("[QQ红包]").trim() },
+            sourceName = content.ifBlank { "QQ红包" },
+            brief = notice.ifBlank { nativeAndroid },
+            redId = redId,
+            authKey = wallet.findFieldValue("authkey")?.toString().orEmpty(),
+            nativeUrl = nativeAndroid,
+            channel = (wallet.findFieldValue("redChannel") as? Number)?.toInt() ?: 0,
+            sessionType = (wallet.findFieldValue("sessiontype") as? Number)?.toInt() ?: 0,
+            walletMsgType = (wallet.findFieldValue("msgType") as? Number)?.toInt() ?: 0,
+            redType = (wallet.findFieldValue("redType") as? Number)?.toInt() ?: 0,
+            grabState = (wallet.findFieldValue("grabState") as? Number)?.toInt() ?: 0
+        )
+    }
+
+    fun clickWalletMessage(peer: AioPeer, message: AioMessage): Boolean {
+        Log.d(
+            "QQRevived.WalletGrab",
+            "wallet click blocked msgId=${message.msgId} peer=${peer.peerId} preview=${message.walletPreview != null}"
+        )
+        showWalletToast("当前版本仅支持查看红包，暂不可领取")
+        return true
+    }
+
+    fun sendCustomPbMessage(peer: AioPeer, json: String): Boolean {
+        val body = buildCustomPbSendMsgBody(peer, json)
+        if (body == null) {
+            showWalletToast("Pb JSON 无效或当前会话不支持")
+            return false
+        }
+        val sent = sendSsoPacket(
+            cmd = "MessageSvc.PbSendMsg",
+            body = body,
+            onComplete = { success, response ->
+                if (success) {
+                    Log.d(
+                        "QQRevived.PbSendMsg",
+                        "custom element sent peer=${peer.peerId} chatType=${peer.chatType} rsp=${response?.size ?: 0}"
+                    )
+                    showWalletToast("PbSendMsg 发包成功")
+                } else {
+                    Log.w(
+                        "QQRevived.PbSendMsg",
+                        "custom element send failed peer=${peer.peerId} chatType=${peer.chatType}"
+                    )
+                    showWalletToast("PbSendMsg 发包失败")
+                }
+            }
+        )
+        if (!sent) {
+            showWalletToast("PbSendMsg 发包启动失败")
+        }
+        return sent
+    }
+
+    private fun buildCustomPbSendMsgBody(peer: AioPeer, json: String): ByteArray? {
+        val routeNode = HostProtoNode().apply {
+            when (peer.chatType) {
+                SINGLE_CHAT_TYPE -> {
+                    val peerUid = peer.peerId.takeIf { it.isNotBlank() } ?: return null
+                    put(1, HostProtoNode().apply {
+                        put(2, peerUid)
+                    })
+                }
+
+                GROUP_CHAT_TYPE -> {
+                    val peerUin = peer.chatUin.takeIf { it > 0L } ?: return null
+                    put(2, HostProtoNode().apply {
+                        put(1, peerUin)
+                    })
+                }
+
+                else -> return null
+            }
+        }
+        val customElement = parseProtoJsonNode(json) ?: return null
+        val sendOptionNode = HostProtoNode().apply {
+            put(1, 1L)
+            put(2, 0L)
+            put(3, 0L)
+        }
+        val msgContentNode = HostProtoNode().apply {
+            put(2, customElement)
+        }
+        val msgNode = HostProtoNode().apply {
+            put(1, msgContentNode)
+        }
+        val body = HostProtoNode().apply {
+            put(1, routeNode)
+            put(2, sendOptionNode)
+            put(3, msgNode)
+            put(4, Random.nextInt(1, Int.MAX_VALUE).toLong())
+            put(5, Random.nextInt(1, Int.MAX_VALUE).toLong())
+        }
+        Log.d(
+            "QQRevived.PbSendMsg",
+            "build body peer=${peer.peerId} chatType=${peer.chatType} json=${body.toJson()}"
+        )
+        return body.encode()
+    }
+
+    private fun parseProtoJsonNode(json: String): HostProtoNode? {
+        val trimmed = json.trim()
+        if (trimmed.isBlank()) return null
+        val root = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
+        return root.toHostProtoNode()
+    }
+
+    private fun JSONObject.toHostProtoNode(): HostProtoNode {
+        val node = HostProtoNode()
+        keys().forEach { key ->
+            val field = key.toIntOrNull() ?: return@forEach
+            when (val value = opt(key)) {
+                is JSONArray -> {
+                    for (index in 0 until value.length()) {
+                        value.opt(index)?.let { item ->
+                            convertJsonValue(item)?.let { node.put(field, it) }
+                        }
+                    }
+                }
+
+                else -> {
+                    convertJsonValue(value)?.let { node.put(field, it) }
+                }
+            }
+        }
+        return node
+    }
+
+    private fun convertJsonValue(value: Any?): Any? {
+        return when (value) {
+            null,
+            JSONObject.NULL -> null
+            is JSONObject -> value.toHostProtoNode()
+            is JSONArray -> {
+                val listNode = HostProtoNode()
+                for (index in 0 until value.length()) {
+                    val child = convertJsonValue(value.opt(index)) ?: continue
+                    listNode.put(index + 1, child)
+                }
+                listNode
+            }
+
+            is Int -> value
+            is Long -> value
+            is Number -> {
+                val longValue = value.toLong()
+                if (longValue in Int.MIN_VALUE..Int.MAX_VALUE) longValue.toInt() else longValue
+            }
+
+            is Boolean -> if (value) 1 else 0
+            is String -> value
+            else -> value.toString()
+        }
+    }
+
+    private fun sendSsoPacket(
+        cmd: String,
+        body: ByteArray,
+        onComplete: ((Boolean, ByteArray?) -> Unit)? = null
+    ): Boolean {
+        return runCatching {
+            val runtime = findAppRuntime(waitRuntime = true) ?: return@runCatching false
+            val mobileQQClass = classLoader.findOptionalClass(MOBILE_QQ_CLASS) ?: return@runCatching false
+            val mobileQQ = mobileQQClass.getDeclaredField("sMobileQQ")
+                .apply { isAccessible = true }
+                .get(null) as? Context ?: return@runCatching false
+            val currentUin = findCurrentUin(runtime) ?: return@runCatching false
+            val newIntentClass = classLoader.findOptionalClass(NEW_INTENT_CLASS) ?: return@runCatching false
+            val servletClass = classLoader.findOptionalClass(SSO_EASY_SERVLET_CLASS) ?: return@runCatching false
+            val toServiceMsgClass = classLoader.findOptionalClass(TO_SERVICE_MSG_CLASS) ?: return@runCatching false
+            val fromServiceMsgClass = classLoader.findOptionalClass(FROM_SERVICE_MSG_CLASS) ?: return@runCatching false
+
+            val intent = newIntentClass.getDeclaredConstructor(Context::class.java, Class::class.java)
+                .apply { isAccessible = true }
+                .newInstance(mobileQQ, servletClass)
+            val toServiceMsg = toServiceMsgClass.constructors.firstOrNull { constructor ->
+                constructor.parameterTypes.contentEquals(
+                    arrayOf(String::class.java, String::class.java, String::class.java)
+                )
+            }?.apply { isAccessible = true }
+                ?.newInstance("mobileqq.service", currentUin, cmd)
+                ?: return@runCatching false
+
+            toServiceMsgClass.methods.firstOrNull { method ->
+                method.name == "putWupBuffer" &&
+                    method.parameterTypes.contentEquals(arrayOf(ByteArray::class.java))
+            }?.invoke(toServiceMsg, HostProtoNode.wrapPacket(body))
+
+            val setObserver = intent.javaClass.methods.firstOrNull { method ->
+                method.name == "setObserver" && method.parameterTypes.size == 1
+            } ?: return@runCatching false
+            val observerType = setObserver.parameterTypes[0]
+            if (!observerType.isInterface) return@runCatching false
+            val observer = Proxy.newProxyInstance(
+                classLoader,
+                arrayOf(observerType)
+            ) { _, method, args ->
+                if (args != null && args.size >= 3) {
+                    val success = args.getOrNull(1) as? Boolean ?: false
+                    val bundle = args.getOrNull(2) as? Bundle
+                    val response = if (success && bundle != null) {
+                        val fromServiceMsg = bundle.getParcelable(FROM_SERVICE_MSG_EXTRA, fromServiceMsgClass)
+                            ?: bundle.getParcelable(FROM_SERVICE_MSG_EXTRA) as? Any
+                        fromServiceMsg?.javaClass?.methods?.firstOrNull { inner ->
+                            inner.name == "getWupBuffer" && inner.parameterTypes.isEmpty()
+                        }?.invoke(fromServiceMsg) as? ByteArray
+                    } else {
+                        null
+                    }
+                    onComplete?.invoke(success, response)
+                }
+                defaultInvocationReturn(method.returnType)
+            }
+            setObserver.invoke(intent, observer)
+            intent.javaClass.methods.firstOrNull { method ->
+                method.name == "putExtra" &&
+                    method.parameterTypes.size == 2 &&
+                    method.parameterTypes[0] == String::class.java &&
+                    method.parameterTypes[1].isAssignableFrom(toServiceMsg.javaClass)
+            }?.invoke(intent, TO_SERVICE_MSG_EXTRA, toServiceMsg)
+
+            runtime.javaClass.methods.firstOrNull { method ->
+                method.name == "startServlet" &&
+                    method.parameterTypes.size == 1 &&
+                    method.parameterTypes[0].isAssignableFrom(intent.javaClass)
+            }?.invoke(runtime, intent)
+            true
+        }.getOrElse {
+            Log.w("QQRevived.PbSendMsg", "sendSsoPacket failed cmd=$cmd", it)
+            false
+        }
+    }
+
+    private fun findAppRuntime(waitRuntime: Boolean): Any? {
+        val mobileQQClass = classLoader.findOptionalClass(MOBILE_QQ_CLASS) ?: return null
+        val mobileQQ = mobileQQClass.getDeclaredField("sMobileQQ")
+            .apply { isAccessible = true }
+            .get(null) ?: return null
+        val methodName = if (waitRuntime) "waitAppRuntime" else "peekAppRuntime"
+        return mobileQQ.javaClass.methods.firstOrNull { method ->
+            method.name == methodName && method.parameterTypes.isEmpty()
+        }?.invoke(mobileQQ)
+    }
+
+    private fun findCurrentUin(runtime: Any): String? {
+        return runtime.javaClass.methods.firstNotNullOfOrNull { method ->
+            if (method.parameterTypes.isNotEmpty()) return@firstNotNullOfOrNull null
+            when (method.name) {
+                "getCurrentUin",
+                "getAccount",
+                "getCurrentAccountUin" -> {
+                    runCatching {
+                        method.invoke(runtime)?.toString()?.takeIf { it.isNotBlank() }
+                    }.getOrNull()
+                }
+
+                else -> null
+            }
+        }
+    }
+
+    private fun showWalletToast(text: String) {
+        val runtime = findAppRuntime(waitRuntime = false)
+        val context = runtime?.javaClass?.methods?.firstOrNull { method ->
+            method.name == "getApplication" && method.parameterTypes.isEmpty()
+        }?.invoke(runtime) as? Context
+        val safeContext = context ?: return
+        AioRuntimeStore.mainHandler.post {
+            Toast.makeText(safeContext, text, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun looksNumericOnly(text: String): Boolean {
+        if (text.isBlank()) return false
+        return text.all { it.isDigit() }
+    }
+
+    private fun normalizeMessageEpochSeconds(value: Long): Long {
+        return if (value > 100_000_000_000L) value / 1000L else value
+    }
+
+    private fun shouldDebugWallet(rawKind: AioMessageKind, text: String): Boolean {
+        return rawKind == AioMessageKind.Wallet ||
+            looksLikeWalletFallback(text) ||
+            text.contains("[QQ红包]") ||
+            text.contains("查收红包") ||
+            text.contains("红包")
+    }
+
+    private fun looksLikeWalletFallback(text: String): Boolean {
+        if (text.isBlank()) return false
+        return text.contains("[QQ红包]") ||
+            text.contains("查收红包") ||
+            text.contains("点击拆开") ||
+            text.contains("恭喜发财")
+    }
+
+    private fun debugLogWalletRecord(msgRecord: Any) {
+        runCatching {
+            val lines = mutableListOf<String>()
+            lines += "msgRecordClass=${msgRecord.javaClass.name}"
+            msgRecord.javaClass.declaredFields.forEach { field ->
+                runCatching {
+                    field.isAccessible = true
+                    lines += "field ${field.name}: ${summarizeWalletValue(field.get(msgRecord))}"
+                }
+            }
+            msgRecord.javaClass.methods
+                .filter { method ->
+                    method.parameterTypes.isEmpty() &&
+                        WALLET_DEBUG_METHOD_KEYWORDS.any { keyword ->
+                            method.name.contains(keyword, ignoreCase = true)
+                        }
+                }
+                .distinctBy { it.name }
+                .forEach { method ->
+                    runCatching {
+                        method.isAccessible = true
+                        val value = method.invoke(msgRecord)
+                        lines += "method ${method.name}(): ${summarizeWalletValue(value)}"
+                    }
+                }
+
+            val elements = elementsGetter.invoke(msgRecord) as? Iterable<*>
+            elements?.filterNotNull()?.forEachIndexed { index, element ->
+                lines += "element[$index] class=${element.javaClass.name} type=${
+                    runCatching { elementTypeGetter.invokeInt(element) }.getOrDefault(-1)
+                }"
+                element.javaClass.declaredFields.forEach { field ->
+                    runCatching {
+                        field.isAccessible = true
+                        lines += "element[$index].field ${field.name}: ${
+                            summarizeWalletValue(field.get(element))
+                        }"
+                    }
+                }
+                element.javaClass.methods
+                    .filter { it.parameterTypes.isEmpty() && it.declaringClass != Object::class.java }
+                    .sortedBy { it.name }
+                    .forEach { method ->
+                        runCatching {
+                            method.isAccessible = true
+                            val value = method.invoke(element)
+                            lines += "element[$index].method ${method.name}(): ${summarizeWalletValue(value)}"
+                            if (value != null && shouldInspectWalletNestedValue(value)) {
+                                value.javaClass.declaredFields.forEach { nestedField ->
+                                    runCatching {
+                                        nestedField.isAccessible = true
+                                        lines += "element[$index].${method.name}.${nestedField.name}: ${
+                                            summarizeWalletValue(nestedField.get(value))
+                                        }"
+                                    }
+                                }
+                            }
+                        }
+                    }
+            }
+
+            val msgAttrsField = runCatching {
+                msgRecord.javaClass.getDeclaredField("msgAttrs").apply { isAccessible = true }
+            }.getOrNull()
+            inspectWalletObject(
+                name = "msgAttrs",
+                value = msgAttrsField?.get(msgRecord),
+                lines = lines,
+                depth = 0,
+                maxDepth = 3,
+                visited = IdentityHashMap()
+            )
+            Log.d("QQRevived.WalletProbe", lines.joinToString("\n"))
+        }
+    }
+
+    private fun summarizeWalletValue(value: Any?): String {
+        if (value == null) return "null"
+        return when (value) {
+            is String -> value.take(300)
+            is ByteArray -> "ByteArray(size=${value.size}, hex=${value.take(48).joinToString("") { "%02x".format(it) }})"
+            is Iterable<*> -> buildString {
+                append(value.javaClass.name)
+                append("(size~")
+                append(value.count())
+                append(')')
+            }
+            else -> {
+                val text = value.toString()
+                if (text.length > 300) {
+                    "${value.javaClass.name}(${text.take(300)}...)"
+                } else {
+                    "${value.javaClass.name}($text)"
+                }
+            }
+        }
+    }
+
+    private fun shouldInspectWalletNestedValue(value: Any): Boolean {
+        return value !is String &&
+            value !is Number &&
+            value !is Boolean &&
+            value !is Enum<*> &&
+            value !is ByteArray &&
+            !value.javaClass.isPrimitive
+    }
+
+    private fun inspectWalletObject(
+        name: String,
+        value: Any?,
+        lines: MutableList<String>,
+        depth: Int,
+        maxDepth: Int,
+        visited: IdentityHashMap<Any, Boolean>
+    ) {
+        lines.add("$name: ${summarizeWalletValue(value)}")
+        if (value == null || depth >= maxDepth || !shouldInspectWalletNestedValue(value)) return
+        if (visited.put(value, true) != null) return
+
+        when (value) {
+            is Map<*, *> -> {
+                value.entries.take(8).forEachIndexed { index, entry ->
+                    inspectWalletObject(
+                        name = "$name.entry[$index].key",
+                        value = entry.key,
+                        lines = lines,
+                        depth = depth + 1,
+                        maxDepth = maxDepth,
+                        visited = visited
+                    )
+                    inspectWalletObject(
+                        name = "$name.entry[$index].value",
+                        value = entry.value,
+                        lines = lines,
+                        depth = depth + 1,
+                        maxDepth = maxDepth,
+                        visited = visited
+                    )
+                }
+                return
+            }
+
+            is Iterable<*> -> {
+                value.take(8).forEachIndexed { index, item ->
+                    inspectWalletObject(
+                        name = "$name[$index]",
+                        value = item,
+                        lines = lines,
+                        depth = depth + 1,
+                        maxDepth = maxDepth,
+                        visited = visited
+                    )
+                }
+                return
+            }
+        }
+
+        value.javaClass.declaredFields.take(20).forEach { field ->
+            runCatching {
+                field.isAccessible = true
+                inspectWalletObject(
+                    name = "$name.${field.name}",
+                    value = field.get(value),
+                    lines = lines,
+                    depth = depth + 1,
+                    maxDepth = maxDepth,
+                    visited = visited
+                )
+            }
+        }
     }
 
     private fun parseArkPreview(ark: Any): AioArkPreview {
@@ -1656,7 +2193,8 @@ internal data class AioHookState(
         val text: String = "",
         val media: AioMediaSpec? = null,
         val forwardPreview: AioForwardPreview? = null,
-        val arkPreview: AioArkPreview? = null
+        val arkPreview: AioArkPreview? = null,
+        val walletPreview: AioWalletPreview? = null
     )
 
     companion object {
@@ -1677,8 +2215,21 @@ internal data class AioHookState(
             "\\btSum=[\"'](\\d+)[\"']",
             RegexOption.IGNORE_CASE
         )
+        private val RED_PACKET_ID_REGEX = Regex("red\\?id=([0-9A-Za-z]+)")
+        private val WALLET_DEBUG_METHOD_KEYWORDS = listOf(
+            "wallet",
+            "hongbao",
+            "red",
+            "pb",
+            "proto",
+            "buffer",
+            "byte",
+            "data",
+            "elem"
+        )
         private val VIDEO_AV_RECORD_TYPES = setOf(2, 3, 4, 5, 6, 12, 26, 28)
         private const val REQUEST_KEY = "request_key"
+        private const val SINGLE_CHAT_TYPE = 1
         private const val EMOTION_CATEGORY_FAVORITE = "favorite"
         private const val EMOTION_CATEGORY_SYSTEM = "system"
         private const val EMOTION_CATEGORY_BIG_SYSTEM = "big-system"
@@ -1688,6 +2239,12 @@ internal data class AioHookState(
         private val HIDDEN_BIG_STICKER_CODES = setOf(392, 393, 394)
 
         private const val MOBILE_QQ_CLASS = "mqq.app.MobileQQ"
+        private const val NEW_INTENT_CLASS = "mqq.app.NewIntent"
+        private const val SSO_EASY_SERVLET_CLASS = "mqq.app.api.impl.SSOEasyServlet"
+        private const val TO_SERVICE_MSG_CLASS = "com.tencent.qphone.base.remote.ToServiceMsg"
+        private const val FROM_SERVICE_MSG_CLASS = "com.tencent.qphone.base.remote.FromServiceMsg"
+        private const val TO_SERVICE_MSG_EXTRA = "ToServiceMsg"
+        private const val FROM_SERVICE_MSG_EXTRA = "FromServiceMsg"
         private const val Q_ROUTE_CLASS = "com.tencent.mobileqq.qroute.QRoute"
         private const val I_KERNEL_SERVICE_CLASS = "com.tencent.qqnt.kernel.api.IKernelService"
         private const val HOST_CONTACT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.Contact"
@@ -1728,7 +2285,6 @@ internal data class AioHookState(
         private const val COLOR_OWNER_BG = 0xFF412917.toInt()
         private const val COLOR_OWNER_TEXT = 0xFFFF8D40.toInt()
         private const val HOST_IMAGE_SUB_TYPE = 0
-        private const val SINGLE_CHAT_TYPE = 1
 
         fun create(classLoader: ClassLoader): AioHookState {
             val watchAIOFragmentClass = classLoader.findTargetClass(WATCH_AIO_FRAGMENT_CLASS)
@@ -1910,6 +2466,7 @@ internal data class AioHookState(
                 picElementGetter = msgElementClass.requiredMethod("getPicElement"),
                 arkElementGetter = msgElementClass.requiredMethod("getArkElement"),
                 multiForwardElementGetter = msgElementClass.requiredMethod("getMultiForwardMsgElement"),
+                walletElementGetter = msgElementClass.requiredMethod("getWalletElement"),
                 avRecordElementGetter = msgElementClass.requiredMethod("getAvRecordElement"),
                 videoElementGetter = msgElementClass.requiredMethod("getVideoElement"),
                 pttElementGetter = msgElementClass.requiredMethod("getPttElement"),
