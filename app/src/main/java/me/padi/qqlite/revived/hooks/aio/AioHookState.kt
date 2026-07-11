@@ -6,6 +6,7 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.AttributeSet
+import android.util.Log
 import android.view.View
 import android.widget.EditText
 import android.widget.ImageView
@@ -14,6 +15,7 @@ import me.padi.qqlite.revived.hooks.common.findTargetClass
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
+import me.padi.qqlite.revived.shared.model.aio.AioForwardPreview
 import me.padi.qqlite.revived.shared.model.aio.AioMediaSpec
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
 import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
@@ -104,12 +106,15 @@ internal data class AioHookState(
     val elementTypeGetter: Method,
     val textElementGetter: Method,
     val picElementGetter: Method,
+    val multiForwardElementGetter: Method,
     val avRecordElementGetter: Method,
     val videoElementGetter: Method,
     val pttElementGetter: Method,
     val fileElementGetter: Method,
     val grayTipElementGetter: Method,
     val textContentGetter: Method,
+    val multiForwardXmlContentGetter: Method,
+    val multiForwardFileNameGetter: Method,
     val avRecordTextGetter: Method,
     val avRecordTypeGetter: Method,
     val picSourcePathGetter: Method,
@@ -229,6 +234,7 @@ internal data class AioHookState(
                 badges = badges,
                 showTimeDivider = showTimeDivider,
                 timeDividerText = formatTimeDividerText(msgTime),
+                forwardPreview = parsed.forwardPreview,
                 media = parsed.media,
                 avatar = senderAvatar(senderUid, senderUin, hostFragment),
                 itemViewRef = itemView?.let { WeakReference(it) }
@@ -1131,6 +1137,7 @@ internal data class AioHookState(
         var media: AioMediaSpec? = null
         var renderKind = AioMessageKind.Unsupported
         var rawKind = AioMessageKind.Unsupported
+        var forwardPreview: AioForwardPreview? = null
         var hasTip = false
 
         elements.filterNotNull().forEach { element ->
@@ -1140,6 +1147,12 @@ internal data class AioHookState(
             textElementGetter.invokeAny(element)?.let { textElement ->
                 textContentGetter.invokeString(textElement)?.takeIf { it.isNotBlank() }
                     ?.let(textParts::add)
+            }
+            multiForwardElementGetter.invokeAny(element)?.let { multiForward ->
+                val preview = parseMultiForwardPreview(multiForward)
+                forwardPreview = preview
+                preview.items.takeIf { it.isNotEmpty() }?.let(textParts::addAll)
+                renderKind = AioMessageKind.MultiMsgForward
             }
             avRecordElementGetter.invokeAny(element)?.let { avRecord ->
                 parseAvRecordText(avRecord).takeIf { it.isNotBlank() }?.let(textParts::add)
@@ -1183,7 +1196,57 @@ internal data class AioHookState(
                 else -> AioMessageKind.Unsupported
             }
         }
-        return ParsedMessage(renderKind, rawKind, textParts.joinToString(""), media)
+        return ParsedMessage(renderKind, rawKind, textParts.joinToString(""), media, forwardPreview)
+    }
+
+    private fun parseMultiForwardPreview(multiForward: Any): AioForwardPreview {
+        val xmlContent = multiForwardXmlContentGetter.invokeString(multiForward).orEmpty()
+        if (xmlContent.isNotBlank()) {
+            Log.d("QQRevived.MultiForwardXml", xmlContent)
+        }
+        val fileName = multiForwardFileNameGetter.invokeString(multiForward)?.trim().orEmpty()
+        val titles = MULTI_FORWARD_TITLE_REGEX.findAll(xmlContent)
+            .mapNotNull { sanitizeXmlText(it.groupValues[1]).takeIf(String::isNotBlank) }
+            .toList()
+        val summary = MULTI_FORWARD_SUMMARY_REGEX.find(xmlContent)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let(::sanitizeXmlText)
+            .orEmpty()
+        val header = titles.firstOrNull()
+            ?: fileName.takeIf { it.isNotBlank() }
+            ?: "合并转发"
+        val items = titles.drop(1)
+        val count = MULTI_FORWARD_TSUM_REGEX.find(xmlContent)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: summary.takeIf { it.isNotBlank() }?.let(::extractForwardCount)
+            ?: 0
+        val footerText = summary.ifBlank {
+            count.takeIf { it > 0 }?.let { "查看${it}条转发消息" } ?: "合并转发"
+        }
+        return AioForwardPreview(
+            header = header,
+            items = items,
+            count = count,
+            footer = footerText,
+            rawXml = xmlContent
+        )
+    }
+
+    private fun sanitizeXmlText(value: String): String {
+        return value
+            .replace("<![CDATA[", "")
+            .replace("]]>", "")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace(WHITESPACE_REGEX, " ")
+            .trim()
+    }
+
+    private fun extractForwardCount(text: String): Int {
+        return FORWARD_COUNT_REGEX.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
     }
 
     private fun parsePic(pic: Any): AioMediaSpec {
@@ -1499,13 +1562,28 @@ internal data class AioHookState(
         val renderKind: AioMessageKind = AioMessageKind.Unsupported,
         val rawKind: AioMessageKind = AioMessageKind.Unsupported,
         val text: String = "",
-        val media: AioMediaSpec? = null
+        val media: AioMediaSpec? = null,
+        val forwardPreview: AioForwardPreview? = null
     )
 
     companion object {
         private const val PIC_THUMB_SIZE_SMALL = 198
         private const val PIC_THUMB_SIZE_ORIGIN = 0
         private const val PIC_THUMB_SIZE_LARGE = 720
+        private val WHITESPACE_REGEX = Regex("\\s+")
+        private val FORWARD_COUNT_REGEX = Regex("(\\d+)\\s*条(?:聊天记录|转发消息)")
+        private val MULTI_FORWARD_TITLE_REGEX = Regex(
+            "<title[^>]*>(.*?)</title>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        private val MULTI_FORWARD_SUMMARY_REGEX = Regex(
+            "<summary[^>]*>(.*?)</summary>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        private val MULTI_FORWARD_TSUM_REGEX = Regex(
+            "\\btSum=[\"'](\\d+)[\"']",
+            RegexOption.IGNORE_CASE
+        )
         private val VIDEO_AV_RECORD_TYPES = setOf(2, 3, 4, 5, 6, 12, 26, 28)
         private const val REQUEST_KEY = "request_key"
         private const val EMOTION_CATEGORY_FAVORITE = "favorite"
@@ -1594,6 +1672,7 @@ internal data class AioHookState(
             val textElementClass = classLoader.findTargetClass(TEXT_ELEMENT_CLASS)
             val picElementClass = classLoader.findTargetClass(PIC_ELEMENT_CLASS)
             val watchPicElementExtClass = classLoader.findOptionalClass(WATCH_PIC_ELEMENT_EXT_CLASS)
+            val multiForwardElementClass = classLoader.findTargetClass(MULTI_FORWARD_MSG_ELEMENT_CLASS)
             val avRecordElementClass = classLoader.findTargetClass(AV_RECORD_ELEMENT_CLASS)
             val videoElementClass = classLoader.findTargetClass(VIDEO_ELEMENT_CLASS)
             val pttElementClass = classLoader.findTargetClass(PTT_ELEMENT_CLASS)
@@ -1734,12 +1813,15 @@ internal data class AioHookState(
                 elementTypeGetter = msgElementClass.requiredMethod("getElementType"),
                 textElementGetter = msgElementClass.requiredMethod("getTextElement"),
                 picElementGetter = msgElementClass.requiredMethod("getPicElement"),
+                multiForwardElementGetter = msgElementClass.requiredMethod("getMultiForwardMsgElement"),
                 avRecordElementGetter = msgElementClass.requiredMethod("getAvRecordElement"),
                 videoElementGetter = msgElementClass.requiredMethod("getVideoElement"),
                 pttElementGetter = msgElementClass.requiredMethod("getPttElement"),
                 fileElementGetter = msgElementClass.requiredMethod("getFileElement"),
                 grayTipElementGetter = msgElementClass.requiredMethod("getGrayTipElement"),
                 textContentGetter = textElementClass.requiredMethod("getContent"),
+                multiForwardXmlContentGetter = multiForwardElementClass.requiredMethod("getXmlContent"),
+                multiForwardFileNameGetter = multiForwardElementClass.requiredMethod("getFileName"),
                 avRecordTextGetter = avRecordElementClass.requiredMethod("getText"),
                 avRecordTypeGetter = avRecordElementClass.requiredMethod("getType"),
                 picSourcePathGetter = picElementClass.requiredMethod("getSourcePath"),

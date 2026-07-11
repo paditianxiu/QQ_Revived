@@ -836,12 +836,12 @@ private fun MessageBubble(
 
                 AioMessageKind.Voice -> VoiceMessageContent(message, contentColor)
                 AioMessageKind.File -> FileMessageContent(message, contentColor)
+                AioMessageKind.MultiMsgForward -> MultiForwardMessageContent(message, contentColor)
                 AioMessageKind.Unsupported,
                 AioMessageKind.Unknown,
                 AioMessageKind.Null,
                 AioMessageKind.Mix,
                 AioMessageKind.Struct,
-                AioMessageKind.MultiMsgForward,
                 AioMessageKind.Reply,
                 AioMessageKind.Wallet,
                 AioMessageKind.ArkStruct,
@@ -1220,6 +1220,64 @@ private fun AioVideoPreviewContent(media: AioMediaSpec) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MultiForwardMessageContent(message: AioMessage, contentColor: Color) {
+    val preview = message.forwardPreview
+    Column(modifier = Modifier.widthIn(min = 180.dp, max = 260.dp)) {
+        Text(
+            text = preview?.header?.ifBlank { "合并转发" } ?: "合并转发",
+            color = contentColor,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Box(
+            modifier = Modifier
+                .padding(top = 8.dp, bottom = 8.dp)
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(contentColor.copy(alpha = 0.14f))
+        )
+        val items = preview?.items.orEmpty()
+        if (items.isNotEmpty()) {
+            items.take(4).forEach { item ->
+                Text(
+                    text = item,
+                    color = contentColor.copy(alpha = 0.78f),
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
+        } else {
+            Text(
+                text = message.text.ifBlank { "暂无摘要" },
+                color = contentColor.copy(alpha = 0.78f),
+                fontSize = 13.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(top = 4.dp, bottom = 8.dp)
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(contentColor.copy(alpha = 0.14f))
+        )
+        Text(
+            text = preview?.footer?.ifBlank {
+                preview?.count?.takeIf { it > 0 }?.let { "查看${it}条转发消息" } ?: "合并转发"
+            } ?: "合并转发",
+            color = contentColor.copy(alpha = 0.56f),
+            style = MiuixTheme.textStyles.body2,
+            fontSize = 11.sp
+        )
     }
 }
 

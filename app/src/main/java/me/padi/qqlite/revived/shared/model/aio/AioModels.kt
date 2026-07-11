@@ -47,6 +47,14 @@ data class AioMessageBadge(
     val backgroundColorArgb: Int? = null
 )
 
+data class AioForwardPreview(
+    val header: String,
+    val items: List<String> = emptyList(),
+    val count: Int = 0,
+    val footer: String = "",
+    val rawXml: String = ""
+)
+
 data class AioMessage(
     val key: String,
     val msgId: Long,
@@ -63,6 +71,7 @@ data class AioMessage(
     val badges: List<AioMessageBadge> = emptyList(),
     val showTimeDivider: Boolean = false,
     val timeDividerText: String = "",
+    val forwardPreview: AioForwardPreview? = null,
     val media: AioMediaSpec? = null,
     val avatar: AvatarSpec? = null,
     val itemViewRef: WeakReference<View>? = null
