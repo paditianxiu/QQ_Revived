@@ -15,6 +15,7 @@ import me.padi.qqlite.revived.hooks.common.findTargetClass
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
+import me.padi.qqlite.revived.shared.model.aio.AioArkPreview
 import me.padi.qqlite.revived.shared.model.aio.AioForwardPreview
 import me.padi.qqlite.revived.shared.model.aio.AioMediaSpec
 import me.padi.qqlite.revived.shared.model.aio.AioMessage
@@ -22,6 +23,7 @@ import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
+import org.json.JSONObject
 import java.io.File
 import java.lang.ref.WeakReference
 import java.lang.reflect.Constructor
@@ -106,6 +108,7 @@ internal data class AioHookState(
     val elementTypeGetter: Method,
     val textElementGetter: Method,
     val picElementGetter: Method,
+    val arkElementGetter: Method,
     val multiForwardElementGetter: Method,
     val avRecordElementGetter: Method,
     val videoElementGetter: Method,
@@ -113,6 +116,12 @@ internal data class AioHookState(
     val fileElementGetter: Method,
     val grayTipElementGetter: Method,
     val textContentGetter: Method,
+    val arkBytesDataGetter: Method,
+    val arkLinkInfoGetter: Method,
+    val arkSubElementTypeGetter: Method,
+    val linkInfoTitleGetter: Method,
+    val linkInfoIconGetter: Method,
+    val linkInfoDescGetter: Method,
     val multiForwardXmlContentGetter: Method,
     val multiForwardFileNameGetter: Method,
     val avRecordTextGetter: Method,
@@ -235,6 +244,7 @@ internal data class AioHookState(
                 showTimeDivider = showTimeDivider,
                 timeDividerText = formatTimeDividerText(msgTime),
                 forwardPreview = parsed.forwardPreview,
+                arkPreview = parsed.arkPreview,
                 media = parsed.media,
                 avatar = senderAvatar(senderUid, senderUin, hostFragment),
                 itemViewRef = itemView?.let { WeakReference(it) }
@@ -1138,6 +1148,7 @@ internal data class AioHookState(
         var renderKind = AioMessageKind.Unsupported
         var rawKind = AioMessageKind.Unsupported
         var forwardPreview: AioForwardPreview? = null
+        var arkPreview: AioArkPreview? = null
         var hasTip = false
 
         elements.filterNotNull().forEach { element ->
@@ -1147,6 +1158,13 @@ internal data class AioHookState(
             textElementGetter.invokeAny(element)?.let { textElement ->
                 textContentGetter.invokeString(textElement)?.takeIf { it.isNotBlank() }
                     ?.let(textParts::add)
+            }
+            arkElementGetter.invokeAny(element)?.let { ark ->
+                val preview = parseArkPreview(ark)
+                arkPreview = preview
+                preview.title.takeIf { it.isNotBlank() }?.let(textParts::add)
+                preview.desc.takeIf { it.isNotBlank() }?.let(textParts::add)
+                renderKind = AioMessageKind.ArkStruct
             }
             multiForwardElementGetter.invokeAny(element)?.let { multiForward ->
                 val preview = parseMultiForwardPreview(multiForward)
@@ -1196,7 +1214,81 @@ internal data class AioHookState(
                 else -> AioMessageKind.Unsupported
             }
         }
-        return ParsedMessage(renderKind, rawKind, textParts.joinToString(""), media, forwardPreview)
+        return ParsedMessage(
+            renderKind = renderKind,
+            rawKind = rawKind,
+            text = textParts.joinToString(""),
+            media = media,
+            forwardPreview = forwardPreview,
+            arkPreview = arkPreview
+        )
+    }
+
+    private fun parseArkPreview(ark: Any): AioArkPreview {
+        val bytesData = arkBytesDataGetter.invokeString(ark).orEmpty()
+        val linkInfo = arkLinkInfoGetter.invokeAny(ark)
+        val linkTitle = linkInfo?.let(linkInfoTitleGetter::invokeString).orEmpty()
+        val linkIcon = linkInfo?.let(linkInfoIconGetter::invokeString).orEmpty()
+        val linkDesc = linkInfo?.let(linkInfoDescGetter::invokeString).orEmpty()
+        val jsonPreview = parseArkJsonPreview(bytesData)
+        val title = linkTitle.ifBlank { jsonPreview.title }
+        val icon = linkIcon.ifBlank { jsonPreview.icon }
+        val desc = linkDesc.ifBlank { jsonPreview.desc }
+        val preview = jsonPreview.preview
+        val sourceName = jsonPreview.sourceName
+        val subType = arkSubElementTypeGetter.invokeInt(ark)
+        if (title.isNotBlank() || desc.isNotBlank() || bytesData.isNotBlank()) {
+            Log.d(
+                "QQRevived.ArkStruct",
+                "subType=$subType title=$title desc=$desc icon=$icon preview=$preview sourceName=$sourceName bytesData=$bytesData"
+            )
+        }
+        return AioArkPreview(
+            title = title,
+            desc = desc,
+            icon = icon,
+            preview = preview,
+            sourceName = sourceName,
+            subType = subType,
+            rawBytesData = bytesData
+        )
+    }
+
+    private fun parseArkJsonPreview(bytesData: String): AioArkPreview {
+        if (bytesData.isBlank()) return AioArkPreview()
+        return runCatching {
+            val root = JSONObject(bytesData)
+            val meta = root.optJSONObject("meta")
+            val detail = meta
+                ?.keys()
+                ?.asSequence()
+                ?.mapNotNull(meta::optJSONObject)
+                ?.firstOrNull()
+
+            val title = detail?.optString("title").orEmpty()
+                .ifBlank { root.optString("prompt").orEmpty() }
+            val desc = detail?.optString("desc").orEmpty()
+                .ifBlank { root.optString("desc").orEmpty() }
+                .ifBlank { root.optString("prompt").orEmpty() }
+            val icon = detail?.optString("icon").orEmpty()
+            val preview = detail?.optString("preview").orEmpty()
+            val sourceName = root.optString("sourceName").orEmpty()
+                .ifBlank {
+                    when (root.optString("app")) {
+                        "com.tencent.miniapp_01" -> "QQ小程序"
+                        else -> ""
+                    }
+                }
+
+            AioArkPreview(
+                title = title,
+                desc = desc,
+                icon = icon,
+                preview = preview,
+                sourceName = sourceName,
+                rawBytesData = bytesData
+            )
+        }.getOrDefault(AioArkPreview(rawBytesData = bytesData))
     }
 
     private fun parseMultiForwardPreview(multiForward: Any): AioForwardPreview {
@@ -1563,7 +1655,8 @@ internal data class AioHookState(
         val rawKind: AioMessageKind = AioMessageKind.Unsupported,
         val text: String = "",
         val media: AioMediaSpec? = null,
-        val forwardPreview: AioForwardPreview? = null
+        val forwardPreview: AioForwardPreview? = null,
+        val arkPreview: AioArkPreview? = null
     )
 
     companion object {
@@ -1672,6 +1765,8 @@ internal data class AioHookState(
             val textElementClass = classLoader.findTargetClass(TEXT_ELEMENT_CLASS)
             val picElementClass = classLoader.findTargetClass(PIC_ELEMENT_CLASS)
             val watchPicElementExtClass = classLoader.findOptionalClass(WATCH_PIC_ELEMENT_EXT_CLASS)
+            val arkElementClass = classLoader.findTargetClass(ARK_ELEMENT_CLASS)
+            val linkInfoClass = classLoader.findTargetClass(LINK_INFO_CLASS)
             val multiForwardElementClass = classLoader.findTargetClass(MULTI_FORWARD_MSG_ELEMENT_CLASS)
             val avRecordElementClass = classLoader.findTargetClass(AV_RECORD_ELEMENT_CLASS)
             val videoElementClass = classLoader.findTargetClass(VIDEO_ELEMENT_CLASS)
@@ -1813,6 +1908,7 @@ internal data class AioHookState(
                 elementTypeGetter = msgElementClass.requiredMethod("getElementType"),
                 textElementGetter = msgElementClass.requiredMethod("getTextElement"),
                 picElementGetter = msgElementClass.requiredMethod("getPicElement"),
+                arkElementGetter = msgElementClass.requiredMethod("getArkElement"),
                 multiForwardElementGetter = msgElementClass.requiredMethod("getMultiForwardMsgElement"),
                 avRecordElementGetter = msgElementClass.requiredMethod("getAvRecordElement"),
                 videoElementGetter = msgElementClass.requiredMethod("getVideoElement"),
@@ -1820,6 +1916,12 @@ internal data class AioHookState(
                 fileElementGetter = msgElementClass.requiredMethod("getFileElement"),
                 grayTipElementGetter = msgElementClass.requiredMethod("getGrayTipElement"),
                 textContentGetter = textElementClass.requiredMethod("getContent"),
+                arkBytesDataGetter = arkElementClass.requiredMethod("getBytesData"),
+                arkLinkInfoGetter = arkElementClass.requiredMethod("getLinkInfo"),
+                arkSubElementTypeGetter = arkElementClass.requiredMethod("getSubElementType"),
+                linkInfoTitleGetter = linkInfoClass.requiredMethod("getTitle"),
+                linkInfoIconGetter = linkInfoClass.requiredMethod("getIcon"),
+                linkInfoDescGetter = linkInfoClass.requiredMethod("getDesc"),
                 multiForwardXmlContentGetter = multiForwardElementClass.requiredMethod("getXmlContent"),
                 multiForwardFileNameGetter = multiForwardElementClass.requiredMethod("getFileName"),
                 avRecordTextGetter = avRecordElementClass.requiredMethod("getText"),

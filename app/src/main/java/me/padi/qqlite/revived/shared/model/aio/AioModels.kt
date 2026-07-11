@@ -55,6 +55,16 @@ data class AioForwardPreview(
     val rawXml: String = ""
 )
 
+data class AioArkPreview(
+    val title: String = "",
+    val desc: String = "",
+    val icon: String = "",
+    val preview: String = "",
+    val sourceName: String = "",
+    val subType: Int = 0,
+    val rawBytesData: String = ""
+)
+
 data class AioMessage(
     val key: String,
     val msgId: Long,
@@ -72,6 +82,7 @@ data class AioMessage(
     val showTimeDivider: Boolean = false,
     val timeDividerText: String = "",
     val forwardPreview: AioForwardPreview? = null,
+    val arkPreview: AioArkPreview? = null,
     val media: AioMediaSpec? = null,
     val avatar: AvatarSpec? = null,
     val itemViewRef: WeakReference<View>? = null

@@ -32,6 +32,8 @@ internal const val MSG_ELEMENT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.
 internal const val TEXT_ELEMENT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.TextElement"
 internal const val PIC_ELEMENT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.PicElement"
 internal const val WATCH_PIC_ELEMENT_EXT_CLASS = "WatchPicElementExtKt"
+internal const val ARK_ELEMENT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.ArkElement"
+internal const val LINK_INFO_CLASS = "com.tencent.qqnt.kernel.nativeinterface.LinkInfo"
 internal const val MULTI_FORWARD_MSG_ELEMENT_CLASS =
     "com.tencent.qqnt.kernel.nativeinterface.MultiForwardMsgElement"
 internal const val AV_RECORD_ELEMENT_CLASS = "com.tencent.qqnt.kernel.nativeinterface.AVRecordElement"

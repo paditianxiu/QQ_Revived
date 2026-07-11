@@ -692,6 +692,11 @@ private fun AioMessageRow(
                     onLongPressMessage = onLongPressMessage,
                     modifier = Modifier.widthIn(max = 292.dp)
                 )
+                MessageTypeCard(
+                    message = message,
+                    alignEnd = message.isSelf,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
             }
             if (message.isSelf) {
                 Spacer(modifier = Modifier.width(8.dp))
@@ -720,6 +725,43 @@ private fun shouldShowTimeDivider(message: AioMessage, previousMessage: AioMessa
 
 private fun normalizeMessageEpochSeconds(value: Long): Long {
     return if (value > 100_000_000_000L) value / 1000L else value
+}
+
+@Composable
+private fun MessageTypeCard(
+    message: AioMessage,
+    alignEnd: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val idText = when {
+        message.msgId > 0L -> message.msgId.toString()
+        message.msgSeq > 0L -> message.msgSeq.toString()
+        else -> message.key
+    }
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f))
+                .border(
+                    width = 0.5.dp,
+                    color = MiuixTheme.colorScheme.outline.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(10.dp)
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = "${message.renderKind.displayName}  ID $idText",
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }
 
 @Composable
@@ -837,6 +879,7 @@ private fun MessageBubble(
                 AioMessageKind.Voice -> VoiceMessageContent(message, contentColor)
                 AioMessageKind.File -> FileMessageContent(message, contentColor)
                 AioMessageKind.MultiMsgForward -> MultiForwardMessageContent(message, contentColor)
+                AioMessageKind.ArkStruct -> ArkMessageContent(message, contentColor)
                 AioMessageKind.Unsupported,
                 AioMessageKind.Unknown,
                 AioMessageKind.Null,
@@ -844,7 +887,6 @@ private fun MessageBubble(
                 AioMessageKind.Struct,
                 AioMessageKind.Reply,
                 AioMessageKind.Wallet,
-                AioMessageKind.ArkStruct,
                 AioMessageKind.StructLongMsg,
                 AioMessageKind.Gift,
                 AioMessageKind.TextGift,
@@ -1224,6 +1266,93 @@ private fun AioVideoPreviewContent(media: AioMediaSpec) {
 }
 
 @Composable
+private fun ArkMessageContent(message: AioMessage, contentColor: Color) {
+    val preview = message.arkPreview
+    Column(modifier = Modifier.widthIn(min = 180.dp, max = 260.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val headerIcon = preview?.icon.orEmpty()
+            if (headerIcon.isNotBlank()) {
+                AsyncImage(
+                    model = rememberAioImageRequest(headerIcon, "ark-header-icon:${message.key}"),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(contentColor.copy(alpha = 0.08f))
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = preview?.title?.ifBlank { "卡片消息" } ?: "卡片消息",
+                color = contentColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        preview?.desc?.takeIf { it.isNotBlank() }?.let { desc ->
+            Text(
+                text = desc,
+                color = contentColor.copy(alpha = 0.78f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        preview?.preview?.takeIf { it.isNotBlank() }?.let { previewImage ->
+            AsyncImage(
+                model = rememberAioImageRequest(previewImage, "ark-preview:${message.key}"),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(contentColor.copy(alpha = 0.08f))
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(contentColor.copy(alpha = 0.14f))
+        )
+        Row(
+            modifier = Modifier.padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(contentColor.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Q",
+                    color = contentColor.copy(alpha = 0.88f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "QQ小程序",
+                color = contentColor.copy(alpha = 0.72f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 private fun MultiForwardMessageContent(message: AioMessage, contentColor: Color) {
     val preview = message.forwardPreview
     Column(modifier = Modifier.widthIn(min = 180.dp, max = 260.dp)) {
@@ -1272,7 +1401,7 @@ private fun MultiForwardMessageContent(message: AioMessage, contentColor: Color)
         )
         Text(
             text = preview?.footer?.ifBlank {
-                preview?.count?.takeIf { it > 0 }?.let { "查看${it}条转发消息" } ?: "合并转发"
+                preview.count.takeIf { it > 0 }?.let { "查看${it}条转发消息" } ?: "合并转发"
             } ?: "合并转发",
             color = contentColor.copy(alpha = 0.56f),
             style = MiuixTheme.textStyles.body2,
