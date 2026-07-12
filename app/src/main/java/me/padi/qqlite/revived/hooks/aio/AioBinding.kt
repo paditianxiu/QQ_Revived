@@ -1,6 +1,5 @@
 package me.padi.qqlite.revived.hooks.aio
 
-import android.content.Context
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.os.Looper
@@ -8,6 +7,8 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.content.Context
+import android.widget.TextView
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -269,6 +270,20 @@ internal class AioBinding(
         }.getOrDefault(false)
     }
 
+    override fun pickImageFromAlbum() {
+        val opened = clickHostMediaEntry("相册")
+        if (!opened) {
+            hookState.showHostToast("打开相册失败")
+        }
+    }
+
+    override fun captureImage() {
+        val opened = clickHostMediaEntry("拍照")
+        if (!opened) {
+            hookState.showHostToast("打开相机失败")
+        }
+    }
+
     override fun startVoiceCall(): Boolean = startAvCall(isVideo = false)
 
     override fun startVideoCall(): Boolean = startAvCall(isVideo = true)
@@ -386,21 +401,32 @@ internal class AioBinding(
         }, LOAD_OLDER_TIMEOUT_MS)
     }
 
-    override fun syncHostListPosition(messageKey: String?) {
-        val key = messageKey?.takeIf { it.isNotBlank() } ?: return
-        val target = currentState.messages.firstOrNull { it.key == key } ?: return
-        if (target.needsMediaRefreshPoll()) {
+    override fun syncHostVisibleMessages(messageKeys: List<String>) {
+        if (messageKeys.isEmpty()) return
+        val visibleMessages = messageKeys.mapNotNull { key ->
+            currentState.messages.firstOrNull { it.key == key }
+        }
+        if (visibleMessages.any { it.needsMediaRefreshPoll() }) {
             schedulePendingMediaRefresh(currentState.messages)
         }
-        if (messageViewRefs[key]?.get() != null) return
-        if (!target.needsHostBinding()) return
-        val targetIndex = currentState.messages.indexOfFirst { it.key == key }
+        val target = visibleMessages.firstOrNull { message ->
+            message.needsHostBinding() && resolvePreviewMessageView(message) == null
+        } ?: return
+        val targetIndex = currentState.messages.indexOfFirst { it.key == target.key }
         if (targetIndex < 0) return
         val sequence = ++hostListSyncSequence
-        AioRuntimeStore.mainHandler.postDelayed({
-            if (hostListSyncSequence != sequence) return@postDelayed
-            hostListViewRef?.get()?.scrollHostListToPosition(targetIndex)
-        }, 96L)
+        HOST_LIST_SYNC_DELAYS_MS.forEach { delayMs ->
+            AioRuntimeStore.mainHandler.postDelayed({
+                if (hostListSyncSequence != sequence) return@postDelayed
+                hostListViewRef?.get()?.scrollHostListToPosition(targetIndex)
+                AioRuntimeStore.mainHandler.postDelayed({
+                    if (hostListSyncSequence != sequence) return@postDelayed
+                    if (findVisiblePreviewMessageView(target) != null) {
+                        scheduleRenderRefresh()
+                    }
+                }, HOST_LIST_BIND_DELAY_MS)
+            }, delayMs)
+        }
     }
 
     override fun updateScrollSnapshot(firstVisibleMessageKey: String?, firstVisibleMessageOffset: Int) {
@@ -425,7 +451,7 @@ internal class AioBinding(
     }
 
     override fun clickMessage(message: AioMessage) {
-        val itemView = messageViewRefs[message.key]?.get()
+        val itemView = resolveActionMessageView(message)
         when (message.renderKind) {
             AioMessageKind.Wallet -> {
                 val handled = hookState.clickWalletMessage(currentState.peer, message)
@@ -442,24 +468,61 @@ internal class AioBinding(
             }
 
             AioMessageKind.Image,
-            AioMessageKind.Video,
             AioMessageKind.FaceBubble,
             AioMessageKind.Giphy -> {
                 itemView.performBoundMediaClick()
+            }
+
+            AioMessageKind.Video -> {
+                itemView.performBoundVideoClick()
             }
 
             else -> Unit
         }
     }
 
-    override fun clickAvatar(message: AioMessage) {
-        val itemView = messageViewRefs[message.key]?.get()
-        itemView.performBestAvatarClick()
+    override fun doubleTapAvatar(message: AioMessage) {
+        val sent = sendPai(message)
+        if (!sent) {
+            hookState.showHostToast(
+                "戳一戳失败: ${message.senderName.ifBlank { message.senderUid.ifBlank { message.senderUin.toString() } }}"
+            )
+            module.logHook(
+                Log.WARN,
+                "AIO compose pai failed key=${message.key} senderUid=${message.senderUid} senderUin=${message.senderUin}"
+            )
+        }
     }
 
     override fun longClickMessage(message: AioMessage) {
-        val itemView = messageViewRefs[message.key]?.get()
+        val itemView = resolveActionMessageView(message)
         itemView.performBestLongClick()
+    }
+
+    override fun sendPai(toUin: String, peerUin: String, chatType: Int): Boolean {
+        if (chatType != currentState.peer.chatType) {
+            hookState.showHostToast("戳一戳失败: chatType 不匹配")
+            return false
+        }
+        val currentPeer = currentState.peer
+        val samePeer =
+            peerUin == currentPeer.peerId ||
+                (currentPeer.chatUin > 0L && peerUin == currentPeer.chatUin.toString())
+        if (!samePeer) {
+            hookState.showHostToast("戳一戳失败: peerUin 不匹配")
+            return false
+        }
+        val target = currentState.messages
+            .asReversed()
+            .firstOrNull { message ->
+                !message.isSelf &&
+                    (toUin == message.senderUid ||
+                        (message.senderUin > 0L && toUin == message.senderUin.toString()))
+            }
+        return sendPai(
+            targetUid = target?.senderUid ?: toUin,
+            targetUin = target?.senderUin ?: toUin.toLongOrNull() ?: 0L
+        )
     }
 
     override fun rememberLongPressAnchor(anchor: IntOffset) {
@@ -517,7 +580,7 @@ internal class AioBinding(
     }
 
     override fun createHostMessagePreviewView(context: Context, message: AioMessage): View? {
-        val itemView = messageViewRefs[message.key]?.get() ?: return null
+        val itemView = resolvePreviewMessageView(message) ?: return null
         return itemView.findHostMediaSource()
     }
 
@@ -677,6 +740,30 @@ internal class AioBinding(
         _pagingMessages.value = PagingData.from(rows)
     }
 
+    private fun currentHostListVb(): Any? {
+        return hostAioListVbRef?.get() ?: AioRuntimeStore.latestAioListVb?.get()
+    }
+
+    private fun sendPai(message: AioMessage): Boolean {
+        return sendPai(message.senderUid, message.senderUin)
+    }
+
+    private fun sendPai(targetUid: String, targetUin: Long): Boolean {
+        return runCatching {
+            hookState.sendPai(
+                peer = currentState.peer,
+                targetUin = targetUin.takeIf { it > 0L } ?: targetUid.toLongOrNull() ?: 0L
+            )
+        }.onFailure {
+            hookState.showHostToast("戳一戳失败: ${it.javaClass.simpleName}")
+            module.logHook(
+                Log.WARN,
+                "AIO compose pai send failed chatType=${currentState.peer.chatType} targetUid=$targetUid targetUin=$targetUin",
+                it
+            )
+        }.getOrDefault(false)
+    }
+
     private fun schedulePendingMediaRefresh(rows: List<AioMessage>) {
         if (rows.none { it.needsMediaRefreshPoll() }) return
         val sequence = ++mediaRefreshSequence
@@ -713,6 +800,55 @@ internal class AioBinding(
         scheduleRenderRefresh()
     }
 
+    private fun resolvePreviewMessageView(message: AioMessage): View? {
+        messageViewRefs[message.key]?.get()?.takeIf { it.isUsableHostPreviewView() }?.let { return it }
+        messageViewRefs.remove(message.key)
+        return findVisiblePreviewMessageView(message)
+    }
+
+    private fun resolveActionMessageView(message: AioMessage): View? {
+        messageViewRefs[message.key]?.get()?.takeIf { it.isUsableHostActionView() }?.let { return it }
+        messageViewRefs.remove(message.key)
+        return findVisibleActionMessageView(message)
+    }
+
+    private fun findVisiblePreviewMessageView(message: AioMessage): View? {
+        val listView = hostListViewRef?.get() ?: return null
+        val itemView = findBoundMessageItemView(listView, message) ?: return null
+        if (!itemView.isUsableHostPreviewView()) return null
+        if (messageViewRefs[message.key]?.get() !== itemView) {
+            messageViewRefs[message.key] = WeakReference(itemView)
+        }
+        return itemView
+    }
+
+    private fun findVisibleActionMessageView(message: AioMessage): View? {
+        return findVisiblePreviewMessageView(message)?.takeIf { it.isUsableHostActionView() }
+    }
+
+    private fun findBoundMessageItemView(listView: View, message: AioMessage): View? {
+        val recyclerView = listView as? RecyclerView ?: return null
+        for (index in 0 until recyclerView.childCount) {
+            val child = recyclerView.getChildAt(index) ?: continue
+            val holder = runCatching { recyclerView.getChildViewHolder(child) }.getOrNull()
+            val holderKey = hookState.messageKeyFromHolder(holder)
+            if (holderKey == message.key) {
+                return child
+            }
+        }
+        for (index in 0 until recyclerView.childCount) {
+            val child = recyclerView.getChildAt(index) ?: continue
+            val position = recyclerView.getChildAdapterPosition(child)
+                .takeIf { it != RecyclerView.NO_POSITION }
+                ?: continue
+            val candidate = currentState.messages.getOrNull(position) ?: continue
+            if (candidate.key == message.key) {
+                return child
+            }
+        }
+        return null
+    }
+
     private fun scheduleRenderRefresh() {
         if (renderRefreshScheduled) return
         renderRefreshScheduled = true
@@ -722,6 +858,32 @@ internal class AioBinding(
                 state.copy(renderRevision = state.renderRevision + 1L)
             }
         }, RENDER_REFRESH_DELAY_MS)
+    }
+
+    private fun clickHostMediaEntry(label: String): Boolean {
+        val viewPager = viewPagerRef.get() ?: return false
+        return runCatching {
+            viewPager.setViewPagerCurrentItem(MENU_PAGE_INDEX, true)
+            AioRuntimeStore.mainHandler.postDelayed({
+                val clicked = runCatching {
+                    val target = viewPager.findHostMenuEntryClickTarget(label)
+                        ?: rootRef.get()?.findHostMenuEntryClickTarget(label)
+                    when {
+                        target == null -> false
+                        target.performClick() -> true
+                        else -> target.invokeBoundClickListener().clicked
+                    }
+                }.onFailure {
+                    module.logHook(Log.WARN, "AIO compose click host media entry failed label=$label", it)
+                }.getOrDefault(false)
+                if (!clicked) {
+                    hookState.showHostToast("打开${label}失败")
+                }
+            }, HOST_MEDIA_CLICK_DELAY_MS)
+            true
+        }.onFailure {
+            module.logHook(Log.WARN, "AIO compose schedule host media entry failed label=$label", it)
+        }.getOrDefault(false)
     }
 
     private fun View?.moveToPreviousAIOFrame(): Boolean {
@@ -746,6 +908,9 @@ internal class AioBinding(
         const val RENDER_REFRESH_DELAY_MS = 80L
         const val LOAD_OLDER_TIMEOUT_MS = 3000L
         const val RELEASE_AIO_AFTER_BACK_DELAY_MS = 120L
+        const val HOST_MEDIA_CLICK_DELAY_MS = 180L
+        val HOST_LIST_SYNC_DELAYS_MS = longArrayOf(48L, 144L, 288L)
+        const val HOST_LIST_BIND_DELAY_MS = 72L
         const val SINGLE_CHAT_TYPE = 1
         const val GROUP_CHAT_TYPE = 2
         const val EMOTION_CATEGORY_FAVORITE = "favorite"
@@ -911,6 +1076,18 @@ private fun View?.performBoundMediaClick(): HostClickResult {
     return directResult
 }
 
+private fun View?.performBoundVideoClick(): HostClickResult {
+    if (this == null) return HostClickResult(false, "null")
+    if (performClick()) return HostClickResult(true, clickTargetName())
+    findLargestClickableDescendant()?.let { target ->
+        if (target === this) return@let
+        if (target.performClick()) {
+            return HostClickResult(true, target.clickTargetName())
+        }
+    }
+    return HostClickResult(false, clickTargetName())
+}
+
 private fun View?.performBestAvatarClick(): HostClickResult {
     if (this == null) return HostClickResult(false, "null")
     val target = findPreferredClickableDescendant(
@@ -926,9 +1103,16 @@ private fun View?.performBestAvatarClick(): HostClickResult {
 
 private fun View?.performBestLongClick(): HostClickResult {
     if (this == null) return HostClickResult(false, "null")
-    if (performLongClick()) return HostClickResult(true, clickTargetName())
+    if (isUsableHostActionView() && runCatching { performLongClick() }.getOrDefault(false)) {
+        return HostClickResult(true, clickTargetName())
+    }
     val target = findLargestLongClickableDescendant()
-    return HostClickResult(target?.performLongClick() == true, target.clickTargetName())
+    val clicked = (
+        target
+            ?.takeIf { it.isUsableHostActionView() }
+            ?.let { safeTarget -> runCatching { safeTarget.performLongClick() }.getOrDefault(false) }
+        ) == true
+    return HostClickResult(clicked, target.clickTargetName())
 }
 
 private fun View.findLargestClickableDescendant(): View? {
@@ -1012,6 +1196,16 @@ private fun View.touchArea(): Int {
     return resolvedWidth * resolvedHeight
 }
 
+private fun View?.isUsableHostActionView(): Boolean {
+    if (this == null) return false
+    return isAttachedToWindow && parent != null
+}
+
+private fun View?.isUsableHostPreviewView(): Boolean {
+    if (this == null) return false
+    return parent != null || isAttachedToWindow
+}
+
 private fun View?.invokeBoundClickListener(fallbackToPerformClick: Boolean = true): HostClickResult {
     if (this == null) return HostClickResult(false, "null")
     val listener = readBoundClickListener()
@@ -1040,6 +1234,38 @@ private fun View?.clickTargetName(): String {
     if (this == null) return "null"
     return "${javaClass.simpleName}{clickable=$isClickable longClickable=$isLongClickable size=${width}x$height}"
 }
+
+private fun View.findHostMenuEntryClickTarget(label: String): View? {
+    var matched: View? = null
+    forEachDescendant { view ->
+        if (view is TextView && view.text?.toString() == label) {
+            matched = view.parentAsView()?.findMenuEntryClickableChild()
+                ?: view.findMenuEntryClickableChild()
+                ?: view.parentAsView()
+                ?: view
+            true
+        } else {
+            false
+        }
+    }
+    return matched
+}
+
+private fun View.findMenuEntryClickableChild(): View? {
+    if (isClickable || hasOnClickListeners()) return this
+    var matched: View? = null
+    forEachDescendant { child ->
+        if (child !== this && (child.isClickable || child.hasOnClickListeners())) {
+            matched = child
+            true
+        } else {
+            false
+        }
+    }
+    return matched
+}
+
+private fun View.parentAsView(): View? = parent as? View
 
 private data class HostClickResult(
     val clicked: Boolean,

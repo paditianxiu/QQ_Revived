@@ -114,6 +114,24 @@ internal fun Any.findFieldValue(name: String): Any? {
     return null
 }
 
+internal fun Any?.findFirstFieldValueAssignableTo(type: Class<*>): Any? {
+    if (this == null) return null
+    var clazz: Class<*>? = javaClass
+    while (clazz != null && clazz != Any::class.java) {
+        clazz.declaredFields.forEach { field ->
+            runCatching {
+                field.isAccessible = true
+                val value = field.get(this)
+                if (value != null && type.isInstance(value)) {
+                    return value
+                }
+            }
+        }
+        clazz = clazz.superclass
+    }
+    return null
+}
+
 internal fun findOptionalField(clazz: Class<*>, name: String): Field? {
     var currentClass: Class<*>? = clazz
     while (currentClass != null && currentClass != Any::class.java) {

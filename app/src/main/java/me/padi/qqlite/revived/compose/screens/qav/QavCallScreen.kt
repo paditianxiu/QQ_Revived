@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import me.padi.qqlite.revived.compose.theme.RevivedTheme
 import me.padi.qqlite.revived.shared.model.ui.QavWindowInfo
+import me.padi.qqlite.revived.utils.LocalHostWindowMetrics
+import me.padi.qqlite.revived.utils.hostNavigationBarsPadding
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
@@ -49,12 +51,15 @@ internal fun QavCallScreen(controller: QavUiController) {
     val uiState by controller.uiState.collectAsState()
     val hostAvatarView = controller.obtainAvatarHostView()
     val density = LocalDensity.current
-    val containerSize = LocalWindowInfo.current.containerSize
-    val windowInfo = remember(containerSize, density) {
+    val fallbackContainerSize = LocalWindowInfo.current.containerSize
+    val hostWindowMetrics = LocalHostWindowMetrics.current
+    val containerWidthPx = hostWindowMetrics.widthPx.takeIf { it > 0 } ?: fallbackContainerSize.width
+    val containerHeightPx = hostWindowMetrics.heightPx.takeIf { it > 0 } ?: fallbackContainerSize.height
+    val windowInfo = remember(containerWidthPx, containerHeightPx, density) {
         with(density) {
             QavWindowInfo.create(
-                width = containerSize.width.toDp(),
-                height = containerSize.height.toDp()
+                width = containerWidthPx.toDp(),
+                height = containerHeightPx.toDp()
             )
         }
     }
@@ -119,7 +124,7 @@ private fun VideoCallScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .navigationBarsPadding()
+                .hostNavigationBarsPadding()
                 .padding(
                     horizontal = windowInfo.horizontalPadding,
                     vertical = windowInfo.verticalPadding
@@ -175,7 +180,7 @@ private fun VoiceCallScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .navigationBarsPadding()
+                .hostNavigationBarsPadding()
                 .padding(
                     horizontal = windowInfo.horizontalPadding,
                     vertical = windowInfo.verticalPadding

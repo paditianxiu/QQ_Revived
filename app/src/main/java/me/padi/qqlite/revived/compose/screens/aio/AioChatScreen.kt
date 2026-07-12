@@ -1,6 +1,7 @@
 package me.padi.qqlite.revived.compose.screens.aio
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.view.View
@@ -11,7 +12,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -72,15 +72,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
@@ -93,7 +90,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.graphics.drawable.toBitmap
-import androidx.core.graphics.withClip
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemKey
@@ -126,6 +122,9 @@ import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
 import me.padi.qqlite.revived.shared.model.ui.AioWindowInfo
+import me.padi.qqlite.revived.utils.LocalHostWindowMetrics
+import me.padi.qqlite.revived.utils.hostNavigationBarsPadding
+import me.padi.qqlite.revived.utils.hostStatusBarsPadding
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.DropdownImpl
@@ -152,18 +151,22 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 internal fun AioChatScreen(controller: AioUiController) {
     val uiState by controller.uiState.collectAsState()
     val pagingMessages = controller.pagingMessages.collectAsLazyPagingItems()
     val density = LocalDensity.current
-    val containerSize = LocalWindowInfo.current.containerSize
-    val windowInfo = remember(containerSize, density) {
+    val fallbackContainerSize = LocalWindowInfo.current.containerSize
+    val hostWindowMetrics = LocalHostWindowMetrics.current
+    val containerWidthPx = hostWindowMetrics.widthPx.takeIf { it > 0 } ?: fallbackContainerSize.width
+    val containerHeightPx = hostWindowMetrics.heightPx.takeIf { it > 0 } ?: fallbackContainerSize.height
+    val windowInfo = remember(containerWidthPx, containerHeightPx, density) {
         with(density) {
             AioWindowInfo.create(
-                width = containerSize.width.toDp(),
-                height = containerSize.height.toDp()
+                width = containerWidthPx.toDp(),
+                height = containerHeightPx.toDp()
             )
         }
     }
@@ -193,6 +196,8 @@ internal fun AioChatScreen(controller: AioUiController) {
                 onDraftChanged = controller::updateDraft,
                 onEmojiClick = { showEmojiSheet = true },
                 onPbClick = { showPbDialog = true },
+                onAlbumClick = controller::pickImageFromAlbum,
+                onCameraClick = controller::captureImage,
                 onSendClick = controller::sendDraft,
                 windowInfo = windowInfo
             )
@@ -292,7 +297,7 @@ private fun AioTopBar(
                 }
             )
             .background(Color.Transparent)
-            .statusBarsPadding()
+            .hostStatusBarsPadding()
     ) {
         Box(
             modifier = Modifier
@@ -450,6 +455,7 @@ private fun AioMessageList(
     var loadOlderArmed by remember { mutableStateOf(false) }
     var anchoredFirstMessageKey by remember { mutableStateOf<String?>(null) }
     var anchoredFirstVisibleOffset by remember { mutableIntStateOf(0) }
+    var previousTailMessageKey by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(messages.itemCount) {
         if (!didInitialScroll && messages.itemCount > 0) {
@@ -476,9 +482,18 @@ private fun AioMessageList(
         anchoredFirstMessageKey = null
     }
 
-    LaunchedEffect(snapshotMessages.lastOrNull()?.key, loadingOlder) {
-        if (!didInitialScroll || snapshotMessages.isEmpty() || loadingOlder) return@LaunchedEffect
-        val lastMessage = snapshotMessages.last()
+    LaunchedEffect(snapshotMessages.lastOrNull()?.key, messages.itemCount, loadingOlder, didInitialScroll) {
+        val lastMessage = snapshotMessages.lastOrNull()
+        val currentTailKey = lastMessage?.key
+        if (!didInitialScroll || currentTailKey == null) {
+            previousTailMessageKey = currentTailKey
+            return@LaunchedEffect
+        }
+        val previousTailKey = previousTailMessageKey
+        previousTailMessageKey = currentTailKey
+        if (loadingOlder || previousTailKey == null || currentTailKey == previousTailKey) {
+            return@LaunchedEffect
+        }
         val totalItems = listState.layoutInfo.totalItemsCount
         val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
         if (lastMessage.isSelf || lastVisibleIndex >= totalItems - 3) {
@@ -496,10 +511,11 @@ private fun AioMessageList(
     LaunchedEffect(listState, messages.itemCount, didInitialScroll) {
         if (!didInitialScroll || messages.itemCount == 0) return@LaunchedEffect
         snapshotFlow {
-            listState.layoutInfo.visibleItemsInfo.firstOrNull { item ->
-                item.key != "aio-load-older" && item.key != "aio-bottom-spacer"
-            }?.key as? String
-        }.distinctUntilChanged().collect(controller::syncHostListPosition)
+            listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                val key = item.key as? String
+                key?.takeUnless { it == "aio-load-older" || it == "aio-bottom-spacer" }
+            }
+        }.distinctUntilChanged().collect(controller::syncHostVisibleMessages)
     }
 
     LaunchedEffect(listState, didInitialScroll, messages.itemCount) {
@@ -811,7 +827,7 @@ private fun MessageBubble(
             .pointerInput(message.key, bubblePositionInWindow) {
                 detectTapGestures(onTap = {
                     when (message.renderKind) {
-                        AioMessageKind.Image, AioMessageKind.Giphy -> onPreviewMessage(message)
+                        AioMessageKind.Image, AioMessageKind.Giphy -> controller.clickMessage(message)
 
                         else -> controller.clickMessage(message)
                     }
@@ -829,7 +845,10 @@ private fun MessageBubble(
                 AioMessageKind.Text -> TextMessageContent(message, contentColor)
                 AioMessageKind.Call -> CallMessageContent(message, contentColor)
                 AioMessageKind.Image, AioMessageKind.Giphy -> ImageMessageContent(
-                    message, contentColor
+                    message = message,
+                    renderRevision = renderRevision,
+                    controller = controller,
+                    contentColor = contentColor
                 )
 
                 AioMessageKind.Video -> VideoMessageContent(
@@ -901,16 +920,39 @@ private fun TextMessageContent(message: AioMessage, contentColor: Color) {
 
 @Composable
 private fun ImageMessageContent(
-    message: AioMessage, contentColor: Color
+    message: AioMessage,
+    renderRevision: Long,
+    controller: AioUiController,
+    contentColor: Color
 ) {
     val media = message.media
-    ImagePreviewFrame(
-        message = message,
-        media = media,
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(resolveAspectRatio(media, 4f / 3f))
-    )
+    val preferInlineHighQuality = media.shouldPreferInlineHighQualityImage()
+    if (preferInlineHighQuality) {
+        ImagePreviewFrame(
+            message = message,
+            media = media,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(resolveAspectRatio(media, 4f / 3f))
+        )
+    } else {
+        HostMessagePreview(
+            message = message,
+            renderRevision = renderRevision,
+            controller = controller,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(resolveAspectRatio(media, 4f / 3f))
+        ) {
+            ImagePreviewFrame(
+                message = message,
+                media = media,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(resolveAspectRatio(media, 4f / 3f))
+            )
+        }
+    }
     if (message.text.isNotBlank() && message.text != "图片") {
         Text(
             text = message.text,
@@ -998,9 +1040,12 @@ private fun HostMessagePreview(
 ) {
     val context = LocalContext.current
     val hostView = rememberHostMessagePreviewView(message, renderRevision, controller, context)
-    if (hostView != null) {
-        HostMessagePreviewCanvas(
-            source = hostView,
+    val previewBitmap = rememberHostMessagePreviewBitmap(message.key, hostView, renderRevision)
+    if (previewBitmap != null) {
+        Image(
+            bitmap = previewBitmap,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
             modifier = modifier
                 .clip(RoundedCornerShape(16.dp))
                 .background(MiuixTheme.colorScheme.secondaryContainer)
@@ -1013,37 +1058,25 @@ private fun HostMessagePreview(
 }
 
 @Composable
-private fun HostMessagePreviewCanvas(
-    source: View, modifier: Modifier = Modifier
-) {
-    var frameTick by remember(source) { mutableIntStateOf(0) }
-    LaunchedEffect(source) {
+private fun rememberHostMessagePreviewBitmap(
+    messageKey: String,
+    source: View?,
+    renderRevision: Long
+): androidx.compose.ui.graphics.ImageBitmap? {
+    var bitmap by remember(messageKey) {
+        mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    }
+    LaunchedEffect(messageKey, source, renderRevision) {
+        if (source == null) return@LaunchedEffect
         repeat(HOST_PREVIEW_FRAME_REFRESH_COUNT) {
             delay(HOST_PREVIEW_FRAME_DELAY_MS)
-            frameTick++
-        }
-    }
-    Canvas(modifier = modifier) {
-        frameTick
-        val sourceWidth = source.width.takeIf { it > 0 } ?: source.measuredWidth
-        val sourceHeight = source.height.takeIf { it > 0 } ?: source.measuredHeight
-        if (sourceWidth <= 0 || sourceHeight <= 0) return@Canvas
-
-        val scale = maxOf(
-            size.width / sourceWidth.toFloat(), size.height / sourceHeight.toFloat()
-        )
-        drawIntoCanvas { canvas ->
-            val nativeCanvas = canvas.nativeCanvas
-            nativeCanvas.withClip(0f, 0f, size.width, size.height) {
-                translate(
-                    (size.width - sourceWidth * scale) / 2f,
-                    (size.height - sourceHeight * scale) / 2f
-                )
-                scale(scale, scale)
-                source.draw(this)
+            captureViewPreviewBitmap(source)?.asImageBitmap()?.let { snapshot ->
+                bitmap = snapshot
+                return@LaunchedEffect
             }
         }
     }
+    return bitmap
 }
 
 @Composable
@@ -1575,6 +1608,8 @@ private fun AioInputBar(
     onDraftChanged: (String) -> Unit,
     onEmojiClick: () -> Unit,
     onPbClick: () -> Unit,
+    onAlbumClick: () -> Unit,
+    onCameraClick: () -> Unit,
     onSendClick: () -> Unit,
     windowInfo: AioWindowInfo,
 ) {
@@ -1583,9 +1618,9 @@ private fun AioInputBar(
             .fillMaxWidth()
             .background(MiuixTheme.colorScheme.surface)
             .imePadding()
-            .navigationBarsPadding()
+            .hostNavigationBarsPadding()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = windowInfo.emojiSheetMaxWidth)
@@ -1594,79 +1629,138 @@ private fun AioInputBar(
                     horizontal = windowInfo.inputHorizontalPadding,
                     vertical = windowInfo.inputVerticalPadding
                 ),
-            verticalAlignment = Alignment.Bottom
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(MiuixTheme.colorScheme.surfaceVariant)
-                    .combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onEmojiClick,
-                        onLongClick = {}
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MiniActionChip(
+                    icon = Icons.Filled.Image,
+                    label = "相册",
+                    onClick = onAlbumClick,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniActionChip(
+                    icon = Icons.Filled.Videocam,
+                    label = "相机",
+                    onClick = onCameraClick,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(MiuixTheme.colorScheme.surfaceVariant)
+                        .combinedClickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onEmojiClick,
+                            onLongClick = {}
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.EmojiEmotions,
+                        contentDescription = "表情",
+                        tint = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onPbClick,
+                    minWidth = 44.dp,
+                    minHeight = 44.dp,
+                    cornerRadius = 22.dp,
+                    backgroundColor = MiuixTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.DataObject,
+                        contentDescription = "ProtoBuf",
+                        tint = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                TextField(
+                    value = draft,
+                    onValueChange = onDraftChanged,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp, end = 8.dp)
+                        .heightIn(min = 44.dp, max = windowInfo.inputMaxHeight),
+                    insideMargin = DpSize(13.dp, 10.dp),
+                    cornerRadius = 22.dp,
+                    label = "消息",
+                    useLabelAsPlaceholder = true,
+                    singleLine = false,
+                    minLines = 1,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences
                     ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.EmojiEmotions,
-                    contentDescription = "表情",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(22.dp)
+                    textStyle = MiuixTheme.textStyles.main.copy(fontSize = 14.sp)
                 )
-            }
-            IconButton(
-                onClick = onPbClick,
-                minWidth = 44.dp,
-                minHeight = 44.dp,
-                cornerRadius = 22.dp,
-                backgroundColor = MiuixTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.padding(start = 8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.DataObject,
-                    contentDescription = "ProtoBuf",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            TextField(
-                value = draft,
-                onValueChange = onDraftChanged,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 8.dp, end = 8.dp)
-                    .heightIn(min = 44.dp, max = windowInfo.inputMaxHeight),
-                insideMargin = DpSize(13.dp, 10.dp),
-                cornerRadius = 22.dp,
-                label = "消息",
-                useLabelAsPlaceholder = true,
-                singleLine = false,
-                minLines = 1,
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Sentences
-                ),
-                textStyle = MiuixTheme.textStyles.main.copy(fontSize = 14.sp)
-            )
-            Button(
-                onClick = onSendClick,
-                enabled = draft.isNotBlank(),
-                minWidth = 44.dp,
-                minHeight = 44.dp,
-                cornerRadius = 22.dp,
-                insideMargin = PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColorsPrimary()
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "发送",
-                    tint = MiuixTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
+                Button(
+                    onClick = onSendClick,
+                    enabled = draft.isNotBlank(),
+                    minWidth = 44.dp,
+                    minHeight = 44.dp,
+                    cornerRadius = 22.dp,
+                    insideMargin = PaddingValues(0.dp),
+                    colors = ButtonDefaults.buttonColorsPrimary()
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "发送",
+                        tint = MiuixTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun MiniActionChip(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f))
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+                onLongClick = {}
+            )
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = MiuixTheme.colorScheme.onSurface,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.main.copy(fontSize = 13.sp),
+            color = MiuixTheme.colorScheme.onSurface
+        )
     }
 }
 
@@ -1796,8 +1890,11 @@ private fun AioEmojiSheet(
     onEmotionClick: (AioEmotionItem) -> Unit
 ) {
     val density = LocalDensity.current
-    val containerSize = LocalWindowInfo.current.containerSize
-    val screenHeight = with(density) { containerSize.height.toDp() }
+    val fallbackContainerSize = LocalWindowInfo.current.containerSize
+    val hostWindowMetrics = LocalHostWindowMetrics.current
+    val screenHeight = with(density) {
+        (hostWindowMetrics.heightPx.takeIf { it > 0 } ?: fallbackContainerSize.height).toDp()
+    }
 
     val maxSheetHeight = (screenHeight * 0.82f).coerceAtLeast(320.dp)
     val maxGridHeight = (maxSheetHeight - 88.dp).coerceAtLeast(160.dp)
@@ -2003,9 +2100,11 @@ private fun AioAvatar(
             .clip(CircleShape)
             .background(MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.22f))
             .border(1.dp, MiuixTheme.colorScheme.outline.copy(alpha = 0.18f), CircleShape)
-            .combinedClickable(
-                onClick = { message?.let(controller::clickAvatar) },
-                onLongClick = { message?.let(controller::longClickMessage) }),
+            .pointerInput(message?.key ?: spec?.stableKey() ?: fallback) {
+                detectTapGestures(
+                    onDoubleTap = { message?.let(controller::doubleTapAvatar) }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
         if (useHostAvatar && spec != null && (spec.uid.isNotBlank() || spec.uin > 0L)) {
@@ -2178,6 +2277,15 @@ private fun AioMediaSpec?.displayPathForImagePreview(): String? {
     return null
 }
 
+private fun AioMediaSpec?.shouldPreferInlineHighQualityImage(): Boolean {
+    if (this == null) return false
+    val highQualityPath = playbackPath.takeUsableMediaPath()
+        ?: localPath.takeUsableMediaPath()
+        ?: return false
+    val preview = previewPath.takeUsableMediaPath()
+    return preview == null || preview != highQualityPath
+}
+
 private fun AioMediaSpec?.displayPathForPlayback(): String? {
     if (this == null) return null
     playbackPath.takeUsableMediaPath()?.let { return it }
@@ -2239,6 +2347,18 @@ private fun Drawable.toPreviewBitmap(): android.graphics.Bitmap? {
     val width = intrinsicWidth.takeIf { it > 0 } ?: 128
     val height = intrinsicHeight.takeIf { it > 0 } ?: 128
     return runCatching { toBitmap(width = width, height = height) }.getOrNull()
+}
+
+private fun captureViewPreviewBitmap(view: View): Bitmap? {
+    val width = view.width.takeIf { it > 0 } ?: view.measuredWidth
+    val height = view.height.takeIf { it > 0 } ?: view.measuredHeight
+    if (width <= 0 || height <= 0) return null
+    return runCatching {
+        Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+            val canvas = android.graphics.Canvas(bitmap)
+            view.draw(canvas)
+        }
+    }.getOrNull()
 }
 
 private fun String?.takeUsableRemoteUrl(): String? {

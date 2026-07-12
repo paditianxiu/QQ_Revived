@@ -102,6 +102,7 @@ data class AioMessage(
     val walletPreview: AioWalletPreview? = null,
     val media: AioMediaSpec? = null,
     val avatar: AvatarSpec? = null,
+    val msgRecordRef: WeakReference<Any>? = null,
     val itemViewRef: WeakReference<View>? = null
 ) {
     val sortTime: Long

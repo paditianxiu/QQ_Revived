@@ -303,7 +303,7 @@ private fun HomeTopBar(
     ) {
         SmallTopAppBar(
             title = pageTitle,
-            subtitle = "QQ Revived",
+            subtitle = profile.nickName ?: "QQ Revived",
             color = if (enableLiquidGlass) Color.Transparent else surfaceColor.copy(alpha = 0.92f),
             titleColor = contentColor,
             subtitleColor = MiuixTheme.colorScheme.onSurfaceVariantSummary,

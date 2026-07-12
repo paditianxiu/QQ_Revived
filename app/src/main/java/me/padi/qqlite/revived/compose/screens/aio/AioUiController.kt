@@ -23,6 +23,8 @@ internal interface AioUiController {
     fun updateDraft(value: String)
     fun sendDraft()
     fun sendImage(path: String): Boolean
+    fun pickImageFromAlbum()
+    fun captureImage()
     fun startVoiceCall(): Boolean
     fun startVideoCall(): Boolean
     fun openEmojiPanel()
@@ -34,12 +36,13 @@ internal interface AioUiController {
     fun createEmotionPreviewView(context: Context, item: AioEmotionItem): View?
     fun reloadEmotionPreview(view: View, item: AioEmotionItem)
     fun loadOlderMessages()
-    fun syncHostListPosition(messageKey: String?)
+    fun syncHostVisibleMessages(messageKeys: List<String>)
     fun updateScrollSnapshot(firstVisibleMessageKey: String?, firstVisibleMessageOffset: Int)
     fun copyMessageText(message: AioMessage, clipboardManager: ClipboardManager): Boolean
     fun clickMessage(message: AioMessage)
-    fun clickAvatar(message: AioMessage)
+    fun doubleTapAvatar(message: AioMessage)
     fun longClickMessage(message: AioMessage)
+    fun sendPai(toUin: String, peerUin: String, chatType: Int): Boolean
     fun rememberLongPressAnchor(anchor: IntOffset)
     fun showLongPressMenu(anchor: IntOffset, items: List<AioLongPressMenuItem>)
     fun dismissLongPressMenu()

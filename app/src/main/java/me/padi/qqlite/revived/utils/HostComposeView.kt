@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.res.AssetManager
 import android.content.res.Resources
+import android.os.Build
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -155,7 +157,12 @@ private class HostComposeBinding(
         hostView = nextHost
         onHostViewReady(nextHost)
         if (useWindowLayer) {
-            overlayDialog = Dialog(root.context).apply {
+            val hostActivity = root.context.findActivity() ?: lifecycleAnchor.context.findActivity()
+            val dialogContext = hostActivity ?: root.context
+            overlayDialog = Dialog(
+                dialogContext,
+                android.R.style.Theme_Translucent_NoTitleBar_Fullscreen
+            ).apply {
                 requestWindowFeature(Window.FEATURE_NO_TITLE)
                 setCanceledOnTouchOutside(false)
                 setOnKeyListener { _, keyCode, event ->
@@ -174,9 +181,22 @@ private class HostComposeBinding(
                 setContentView(nextHost)
                 configureWindow()
                 installWindowOwners(this, nextHost, nextOwner)
-                show()
-                configureWindow()
-                installWindowOwners(this, nextHost, nextOwner)
+                nextHost.post {
+                    attemptShowOverlayDialog(
+                        dialog = this@apply,
+                        host = nextHost,
+                        owner = nextOwner,
+                        attempt = 0
+                    )
+                }
+                root.postDelayed({
+                    attemptShowOverlayDialog(
+                        dialog = this@apply,
+                        host = nextHost,
+                        owner = nextOwner,
+                        attempt = 1
+                    )
+                }, DIALOG_SHOW_RETRY_DELAY_MS)
             }
         } else {
             root.addView(nextHost, root.layoutParamsFactory())
@@ -184,16 +204,106 @@ private class HostComposeBinding(
         }
     }
 
+    private fun attemptShowOverlayDialog(
+        dialog: Dialog,
+        host: View,
+        owner: HostComposeOwner,
+        attempt: Int
+    ) {
+        if (overlayDialog !== dialog || hostView !== host) {
+            return
+        }
+        if (!canShowOverlayDialog()) {
+            if (attempt < MAX_DIALOG_SHOW_RETRY_COUNT) {
+                host.postDelayed({
+                    attemptShowOverlayDialog(dialog, host, owner, attempt + 1)
+                }, DIALOG_SHOW_RETRY_DELAY_MS)
+            }
+            return
+        }
+        runCatching {
+            if (!dialog.isShowing) {
+                dialog.show()
+            }
+            dialog.configureWindow()
+            installWindowOwners(dialog, host, owner)
+            host.post {
+                if (overlayDialog === dialog && dialog.isShowing) {
+                    dialog.configureWindow()
+                    installWindowOwners(dialog, host, owner)
+                }
+            }
+        }.onFailure {
+            if (attempt < MAX_DIALOG_SHOW_RETRY_COUNT) {
+                host.postDelayed({
+                    attemptShowOverlayDialog(dialog, host, owner, attempt + 1)
+                }, DIALOG_SHOW_RETRY_DELAY_MS)
+            } else {
+                dialog.setOnDismissListener(null)
+                runCatching { dialog.dismiss() }
+                if (overlayDialog === dialog) {
+                    overlayDialog = null
+                    hostView = null
+                    onHostViewDestroyed(host)
+                }
+                owner.destroy()
+                if (this.owner === owner) {
+                    this.owner = null
+                }
+                throw it
+            }
+        }
+    }
+
+    private fun canShowOverlayDialog(): Boolean {
+        if (!lifecycleAnchor.isAttachedToWindow || !root.isAttachedToWindow) {
+            return false
+        }
+        val activity = root.context.findActivity() ?: lifecycleAnchor.context.findActivity() ?: return false
+        if (activity.isFinishing) {
+            return false
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && activity.isDestroyed) {
+            return false
+        }
+        return root.windowToken != null || lifecycleAnchor.windowToken != null
+    }
+
     private fun Dialog.configureWindow() {
         window?.apply {
+            val hostWindow = root.context.findActivityWindow()
+            val hostDecor = hostWindow?.decorView
+            val hostAttributes = hostWindow?.attributes
             setBackgroundDrawable(android.graphics.Color.TRANSPARENT.toDrawable())
             clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
+            addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            setGravity(Gravity.TOP or Gravity.START)
             StatusBarHook.applyWindowStatusBarPolicy(this)
+            attributes = attributes.apply {
+                width = hostDecor?.width?.takeIf { it > 0 } ?: ViewGroup.LayoutParams.MATCH_PARENT
+                height = hostDecor?.height?.takeIf { it > 0 } ?: ViewGroup.LayoutParams.MATCH_PARENT
+                x = 0
+                y = 0
+                horizontalMargin = 0f
+                verticalMargin = 0f
+                if (hostAttributes != null) {
+                    softInputMode = hostAttributes.softInputMode
+                    dimAmount = 0f
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = hostWindow?.attributes?.layoutInDisplayCutoutMode
+                        ?: WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
             decorView.setPadding(0, 0, 0, 0)
+            decorView.fitsSystemWindows = false
+            decorView.minimumWidth = 0
+            decorView.minimumHeight = 0
             setLayout(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
+                hostDecor?.width?.takeIf { it > 0 } ?: ViewGroup.LayoutParams.MATCH_PARENT,
+                hostDecor?.height?.takeIf { it > 0 } ?: ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
     }
@@ -291,7 +401,11 @@ private class HostComposeBinding(
                 }
             })
             configure()
-            setContent(content)
+            setContent {
+                ProvideHostWindowMetrics(sourceView = lifecycleAnchor) {
+                    content()
+                }
+            }
         }
     }
 
@@ -319,12 +433,7 @@ private class HostComposeBinding(
         }
     }
 
-    private companion object {
-        const val MAX_DUPLICATE_HOST_REMOVAL = 4
-    }
 }
-
-private const val MAX_DUPLICATE_HOST_REMOVAL = 4
 
 private class HostComposeContainer(context: Context) : FrameLayout(context) {
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -586,3 +695,7 @@ private object ViewTreeOwnerBridge {
             .invoke(null, view) as? NavigationEventDispatcherOwner
     }
 }
+
+private const val MAX_DUPLICATE_HOST_REMOVAL = 4
+private const val MAX_DIALOG_SHOW_RETRY_COUNT = 18
+private const val DIALOG_SHOW_RETRY_DELAY_MS = 48L

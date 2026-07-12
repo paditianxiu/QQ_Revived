@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.util.AttributeSet
 import android.util.Log
 import android.view.View
@@ -229,7 +228,7 @@ internal data class AioHookState(
                 debugLogWalletRecord(msgRecord)
             }
             val hostTipText = if (parsed.renderKind == AioMessageKind.Tip) {
-                readHostGrayTipText(data)
+                readHostGrayTipText(data, msgRecord)
             } else {
                 null
             }
@@ -258,6 +257,7 @@ internal data class AioHookState(
                 walletPreview = parsed.walletPreview,
                 media = parsed.media,
                 avatar = senderAvatar(senderUid, senderUin, hostFragment),
+                msgRecordRef = WeakReference(msgRecord),
                 itemViewRef = itemView?.let { WeakReference(it) }
             )
         }.getOrNull()
@@ -267,6 +267,24 @@ internal data class AioHookState(
         return rows.mapNotNull { row ->
             toMessage(data = row, holder = null, hostFragment = hostFragment)
         }
+    }
+
+    fun messageKeyOf(data: Any?): String? {
+        if (data == null || !watchMsgItemClass.isInstance(data)) return null
+        val msgRecord = msgRecordField.get(data) ?: return null
+        val msgId = msgIdGetter.invokeLong(msgRecord)
+        val msgSeq = msgSeqGetter.invokeLong(msgRecord)
+        val msgRandom = msgRandomGetter.invokeLong(msgRecord)
+        val msgTime = timeStampGetter.invokeLong(msgRecord).takeIf { it > 0L }
+            ?: msgTimeGetter.invokeLong(msgRecord)
+        val senderUid = senderUidGetter.invokeString(msgRecord).orEmpty()
+        val senderUin = senderUinGetter.invokeLong(msgRecord)
+        return buildMessageKey(msgId, msgSeq, msgRandom, msgTime, senderUid, senderUin)
+    }
+
+    fun messageKeyFromHolder(holder: Any?): String? {
+        val data = holder.findFirstFieldValueAssignableTo(watchMsgItemClass) ?: return null
+        return messageKeyOf(data)
     }
 
     fun isWatchMsgListRepo(value: Any?): Boolean {
@@ -1143,6 +1161,60 @@ internal data class AioHookState(
         return apiMethod.invoke(null, apiClass)
     }
 
+    fun sendPai(peer: AioPeer, targetUin: Long): Boolean {
+        if (peer.chatType !in SUPPORTED_PAI_CHAT_TYPES) {
+            showHostToast("拍一拍失败: 当前会话类型不支持")
+            return false
+        }
+        if (targetUin <= 0L) {
+            showHostToast("拍一拍失败: 目标 QQ 号无效")
+            return false
+        }
+        val body = buildPaiPacketBody(peer, targetUin) ?: run {
+            showHostToast("拍一拍失败: 包体构造失败")
+            return false
+        }
+        val sent = sendSsoPacket(
+            cmd = HOST_PAI_CMD,
+            body = body,
+            onComplete = { success, _ ->
+                if (success) {
+                    showHostToast("拍一拍已发送")
+                } else {
+                    showHostToast("拍一拍失败: 宿主发包返回失败")
+                }
+            }
+        )
+        if (!sent) {
+            showHostToast("拍一拍失败: 发包启动失败")
+        }
+        return sent
+    }
+
+    private fun buildPaiPacketBody(peer: AioPeer, targetUin: Long): ByteArray? {
+        val peerUin = peer.chatUin.takeIf { it > 0L } ?: peer.peerId.toLongOrNull() ?: return null
+        val extNode = HostProtoNode().apply {
+            put(1, targetUin)
+            when (peer.chatType) {
+                SINGLE_CHAT_TYPE -> put(5, peerUin)
+                GROUP_CHAT_TYPE -> put(2, peerUin)
+            }
+            put(6, 0)
+        }
+        val body = HostProtoNode().apply {
+            put(1, HOST_PAI_OIDB)
+            put(2, 1)
+            put(3, 0)
+            put(4, extNode)
+            put(6, HOST_PAI_CLIENT_VERSION)
+        }
+        Log.d(
+            "QQRevived.PaiSend",
+            "build body chatType=${peer.chatType} peerUin=$peerUin targetUin=$targetUin json=${body.toJson()}"
+        )
+        return body.encode()
+    }
+
     private fun Any.findHostWatchAioListVm(): Any? {
         val vmClass = watchAioListVmClass ?: return null
         findFieldValue("b")?.takeIf { vmClass.isInstance(it) }?.let { return it }
@@ -1564,6 +1636,10 @@ internal data class AioHookState(
         }
     }
 
+    fun showHostToast(text: String) {
+        showWalletToast(text)
+    }
+
     private fun looksNumericOnly(text: String): Boolean {
         if (text.isBlank()) return false
         return text.all { it.isDigit() }
@@ -1881,7 +1957,7 @@ internal data class AioHookState(
     private fun parsePic(pic: Any): AioMediaSpec {
         val sourcePath = watchPicOriginPathMethod?.invokeStringOrNull(null, pic)
             ?: picSourcePathGetter.invokeString(pic)?.takeIf { it.isNotBlank() }
-        val thumbPath = firstCandidatePath(
+        val thumbPath = bestMediaCandidatePath(
             watchPicThumbPathMethod?.invokeStringOrNull(null, pic, PIC_THUMB_SIZE_SMALL),
             watchPicThumbPathMethod?.invokeStringOrNull(null, pic, PIC_THUMB_SIZE_ORIGIN),
             watchPicThumbPathMethod?.invokeStringOrNull(null, pic, PIC_THUMB_SIZE_LARGE),
@@ -1889,10 +1965,10 @@ internal data class AioHookState(
         )
         val originUrl = picOriginUrlGetter.invokeString(pic)?.takeIf { it.isNotBlank() }
         return AioMediaSpec(
-            localPath = firstCandidatePath(sourcePath, thumbPath),
+            localPath = bestMediaCandidatePath(sourcePath, thumbPath),
             remoteUrl = normalizeRemoteUrl(originUrl),
-            previewPath = firstCandidatePath(thumbPath, sourcePath),
-            playbackPath = firstCandidatePath(sourcePath, thumbPath),
+            previewPath = bestMediaCandidatePath(thumbPath, sourcePath),
+            playbackPath = bestMediaCandidatePath(sourcePath, thumbPath),
             width = picWidthGetter.invokeInt(pic),
             height = picHeightGetter.invokeInt(pic),
             fileName = picFileNameGetter.invokeString(pic)
@@ -1908,12 +1984,12 @@ internal data class AioHookState(
     }
 
     private fun parseVideo(video: Any): AioMediaSpec {
-        val thumbPath = firstCandidatePath(videoThumbPathGetter.invokeMapPath(video))
+        val thumbPath = bestMediaCandidatePath(videoThumbPathGetter.invokeMapPath(video))
         val filePath = videoFilePathGetter.invokeString(video)?.takeIf { it.isNotBlank() }
         return AioMediaSpec(
-            localPath = firstCandidatePath(filePath, thumbPath),
-            previewPath = firstCandidatePath(thumbPath, filePath),
-            playbackPath = firstCandidatePath(filePath, thumbPath),
+            localPath = bestMediaCandidatePath(filePath, thumbPath),
+            previewPath = bestMediaCandidatePath(thumbPath, filePath),
+            playbackPath = bestMediaCandidatePath(filePath, thumbPath),
             width = videoThumbWidthGetter.invokeInt(video),
             height = videoThumbHeightGetter.invokeInt(video),
             durationSeconds = videoFileTimeGetter.invokeInt(video),
@@ -1964,6 +2040,19 @@ internal data class AioHookState(
             .firstOrNull()
     }
 
+    private fun bestMediaCandidatePath(vararg values: String?): String? {
+        val candidates = values
+            .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
+        return candidates.firstOrNull(::isUsableMediaCandidatePath)
+            ?: candidates.firstOrNull()
+    }
+
+    private fun isUsableMediaCandidatePath(path: String): Boolean {
+        return path.startsWith("content://") ||
+            path.startsWith("file://") ||
+            File(path).exists()
+    }
+
     private fun normalizeRemoteUrl(value: String?): String? {
         val url = value?.trim()?.takeIf(String::isNotBlank) ?: return null
         return when {
@@ -1975,13 +2064,127 @@ internal data class AioHookState(
         }
     }
 
-    private fun readHostGrayTipText(data: Any): String? {
-        return listOf("r", "grayTipText", "tipText")
-            .firstNotNullOfOrNull { fieldName ->
-                (data.findFieldValue(fieldName) as? CharSequence)
-                    ?.toString()
-                    ?.takeIf { it.isNotBlank() }
+    private fun readHostGrayTipText(data: Any, msgRecord: Any): String? {
+        readGrayTipTextFromObject(data)?.let { return it }
+        val elements = elementsGetter.invokeAny(msgRecord) as? Iterable<*> ?: return null
+        return elements.firstNotNullOfOrNull { element ->
+            val grayTip = element?.let(grayTipElementGetter::invokeAny) ?: return@firstNotNullOfOrNull null
+            readGrayTipTextFromObject(grayTip)
+        }
+    }
+
+    private fun readGrayTipTextFromObject(target: Any?): String? {
+        if (target == null) return null
+        readGrayTipTextFields(target)?.let { return it }
+
+        listOf(
+            "jsonGrayTipElement",
+            "localGrayTipElement",
+            "groupElement",
+            "buddyElement",
+            "revokeElement",
+            "aioOpGrayTipElement",
+            "xmlElement"
+        ).forEach { fieldName ->
+            readGrayTipTextFromObject(target.findFieldValue(fieldName))?.let { return it }
+        }
+        return null
+    }
+
+    private fun readGrayTipTextFields(target: Any): String? {
+        listOf(
+            "r",
+            "grayTipText",
+            "tipText",
+            "recentAbstract",
+            "msgSummary",
+            "summary",
+            "brief",
+            "content",
+            "text"
+        ).forEach { fieldName ->
+            (target.findFieldValue(fieldName) as? CharSequence)
+                ?.toString()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+
+        listOf(
+            "getRecentAbstract",
+            "getGrayTipText",
+            "getTipText",
+            "getSummary",
+            "getBrief",
+            "getContent",
+            "getText"
+        ).forEach { methodName ->
+            (target.invokeNoArg(methodName) as? CharSequence)
+                ?.toString()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+
+        listOf("extraJson", "jsonStr").forEach { fieldName ->
+            (target.findFieldValue(fieldName) as? CharSequence)
+                ?.toString()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { parseGrayTipJsonText(it) }
+                ?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseGrayTipJsonText(raw: String): String? {
+        val text = raw.trim()
+        if (text.isBlank()) return null
+        if (!text.startsWith("{") && !text.startsWith("[")) return text
+        return runCatching {
+            when {
+                text.startsWith("{") -> parseGrayTipJsonObject(JSONObject(text))
+                text.startsWith("[") -> parseGrayTipJsonArray(JSONArray(text))
+                else -> null
             }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun parseGrayTipJsonObject(json: JSONObject): String? {
+        listOf("recentAbstract", "grayTipText", "tipText", "summary", "brief", "content", "text")
+            .forEach { key ->
+                json.optString(key)
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { return it }
+            }
+
+        val items = json.optJSONArray("items")
+        if (items != null) {
+            return parseGrayTipJsonArray(items)
+        }
+        return null
+    }
+
+    private fun parseGrayTipJsonArray(array: JSONArray): String? {
+        val parts = buildList {
+            for (index in 0 until array.length()) {
+                when (val item = array.opt(index)) {
+                    is JSONObject -> {
+                        val type = item.optString("type")
+                        val text = when (type) {
+                            "qq" -> item.optString("nm")
+                            "img" -> item.optString("alt")
+                            else -> item.optString("txt")
+                        }.takeIf { it.isNotBlank() }
+                            ?: item.optString("text").takeIf { it.isNotBlank() }
+                            ?: item.optString("content").takeIf { it.isNotBlank() }
+                            ?: parseGrayTipJsonObject(item)
+                        if (!text.isNullOrBlank()) add(text)
+                    }
+
+                    is JSONArray -> parseGrayTipJsonArray(item)?.let(::add)
+                    is String -> item.takeIf { it.isNotBlank() }?.let(::add)
+                }
+            }
+        }
+        return parts.joinToString("").takeIf { it.isNotBlank() }
     }
 
     private fun readSenderName(data: Any, msgRecord: Any, senderUid: String): String {
@@ -2252,6 +2455,10 @@ internal data class AioHookState(
         private const val I_WATCH_QAV_FACADE_CLASS = "com.tencent.qqnt.watch.IWatchQavFacade"
         private const val I_KERNEL_MSG_LISTENER_CLASS =
             "com.tencent.qqnt.kernel.nativeinterface.IKernelMsgListener"
+        private val SUPPORTED_PAI_CHAT_TYPES = setOf(1, 2)
+        private const val HOST_PAI_CMD = "OidbSvc.0xed3"
+        private const val HOST_PAI_OIDB = 3795
+        private const val HOST_PAI_CLIENT_VERSION = "android 9.0.5"
         private const val GPRO_EMOJI_DOWNLOAD_PARAMS_CLASS =
             "com.tencent.qqnt.kernel.nativeinterface.GproEmojiDownloadParams"
         private const val FETCH_FAV_EMOJI_CALLBACK_CLASS =
