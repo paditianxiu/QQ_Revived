@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import me.padi.qqlite.revived.compose.screens.home.*
+import me.padi.qqlite.revived.shared.model.home.HomeWindowInfo
 import me.padi.qqlite.revived.shared.model.home.HomeUiState
 import me.padi.qqlite.revived.shared.model.home.RecentRow
 import top.yukonga.miuix.kmp.basic.Icon
@@ -42,7 +43,8 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 @Composable
 internal fun RecentMessagesPage(
     controller: HomeUiController,
-    uiState: HomeUiState
+    uiState: HomeUiState,
+    windowInfo: HomeWindowInfo,
 ) {
     val rows = uiState.recentRows
     if (rows.isEmpty()) {
@@ -60,7 +62,7 @@ internal fun RecentMessagesPage(
             .overScrollVertical(),
         state = listState,
         contentPadding = PaddingValues(bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(windowInfo.listItemSpacing)
     ) {
         item(key = "recent-top-spacer") {
             Spacer(modifier = Modifier.height(8.dp))
@@ -73,15 +75,15 @@ internal fun RecentMessagesPage(
                 )
             }
             item(key = "pinned-content") {
-                AnimatedVisibility(
-                    visible = pinnedExpanded,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        pinnedRows.forEach { row ->
-                            RecentMessageRow(
-                                controller = controller,
+                    AnimatedVisibility(
+                        visible = pinnedExpanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(windowInfo.listItemSpacing)) {
+                            pinnedRows.forEach { row ->
+                                RecentMessageRow(
+                                    controller = controller,
                                 row = row,
                                 icon = Icons.Filled.PushPin
                             )

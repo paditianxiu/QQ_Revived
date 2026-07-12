@@ -2,6 +2,8 @@ package me.padi.qqlite.revived.shared.model.home
 
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import me.padi.qqlite.revived.shared.model.ui.RevivedAdaptiveInfo
+import me.padi.qqlite.revived.shared.model.ui.RevivedWidthSizeClass
 import java.lang.ref.WeakReference
 
 data class HomeProfile(
@@ -25,7 +27,7 @@ data class HomeUiState(
         get() = selfActions.filter { it.title in VISIBLE_SELF_ACTION_TITLES }
 
     private companion object {
-        val VISIBLE_SELF_ACTION_TITLES = setOf("我", "修改资料", "绑定监护人", "注销账号", "退出账号")
+        val VISIBLE_SELF_ACTION_TITLES = setOf("我", "修改资料", "退出账号")
     }
 }
 
@@ -42,29 +44,45 @@ data class HomeWindowInfo(
     val headerHeight: Dp,
     val horizontalPadding: Dp,
     val contentPadding: Dp,
+    val maxContentWidth: Dp,
+    val profileGridColumns: Int,
+    val listItemSpacing: Dp,
     val pictureHeight: Dp,
     val pictureItemWidth: Dp
 ) {
     companion object {
         fun create(width: Dp, height: Dp): HomeWindowInfo {
-            val shortest = minOf(width, height)
-            val isTabletOrLarge = shortest >= 600.dp || width >= 720.dp
-            val isLandscape = width > height
+            val adaptive = RevivedAdaptiveInfo.create(width, height)
+            val isTabletOrLarge = adaptive.isTablet
+            val isLandscape = adaptive.isLandscape
             return HomeWindowInfo(
                 useNavigationRail = isTabletOrLarge,
                 headerHeight = when {
-                    isTabletOrLarge -> HOME_HEADER_HEIGHT_DP.dp
+                    isTabletOrLarge -> 68.dp
                     isLandscape -> 76.dp
-                    else -> 88.dp
+                    else -> HOME_HEADER_HEIGHT_DP.dp
                 },
                 horizontalPadding = if (isTabletOrLarge) 22.dp else 14.dp,
                 contentPadding = if (isTabletOrLarge) 16.dp else 10.dp,
+                maxContentWidth = when (adaptive.widthClass) {
+                    RevivedWidthSizeClass.Expanded -> 980.dp
+                    RevivedWidthSizeClass.Medium -> 820.dp
+                    RevivedWidthSizeClass.Compact -> 640.dp
+                },
+                profileGridColumns = when (adaptive.widthClass) {
+                    RevivedWidthSizeClass.Expanded -> 4
+                    RevivedWidthSizeClass.Medium -> 3
+                    RevivedWidthSizeClass.Compact -> 2
+                },
+                listItemSpacing = if (isTabletOrLarge) 10.dp else 8.dp,
                 pictureHeight = when {
+                    adaptive.widthClass == RevivedWidthSizeClass.Expanded -> 240.dp
                     isTabletOrLarge -> 220.dp
                     isLandscape -> 150.dp
                     else -> 176.dp
                 },
                 pictureItemWidth = when {
+                    adaptive.widthClass == RevivedWidthSizeClass.Expanded -> 240.dp
                     isTabletOrLarge -> 220.dp
                     isLandscape -> 176.dp
                     else -> 156.dp
@@ -140,14 +158,14 @@ data class SelfActionRow(
 
 fun RecentRow.sameUi(other: RecentRow): Boolean {
     return key == other.key &&
-        title == other.title &&
-        summary == other.summary &&
-        time == other.time &&
-        sortTime == other.sortTime &&
-        orderHint == other.orderHint &&
-        unread == other.unread &&
-        pinned == other.pinned &&
-        avatar?.stableKey() == other.avatar?.stableKey()
+            title == other.title &&
+            summary == other.summary &&
+            time == other.time &&
+            sortTime == other.sortTime &&
+            orderHint == other.orderHint &&
+            unread == other.unread &&
+            pinned == other.pinned &&
+            avatar?.stableKey() == other.avatar?.stableKey()
 }
 
 fun ContactRow.sameUi(other: ContactRow): Boolean {

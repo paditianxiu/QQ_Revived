@@ -415,10 +415,7 @@ internal object AioComposeHook : BaseHook() {
             binding.markLoaded()
         }, 1200L)
 
-        val mountRoot = findActivityContentRoot() ?: this
-        if (mountRoot !== this) {
-            findViewWithTag<View>(AIO_COMPOSE_TAG)?.let(::removeView)
-        }
+        val mountRoot = this
 
         if (existingBinding != null && mountRoot.findViewWithTag<View>(AIO_COMPOSE_TAG) != null) {
             mountRoot.keepComposeAioOverlayOnTop()
@@ -433,10 +430,10 @@ internal object AioComposeHook : BaseHook() {
             useWindowLayer = true,
             wrapInContainer = false,
             configure = {
-                isClickable = true
-                isFocusable = true
-                isFocusableInTouchMode = true
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+                isClickable = false
+                isFocusable = false
+                isFocusableInTouchMode = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 alpha = 1f
                 elevation = 128f
                 translationZ = 128f
@@ -471,10 +468,10 @@ internal object AioComposeHook : BaseHook() {
             AioRuntimeStore.markAioSurfaceActive()
             composeView.visibility = View.VISIBLE
             composeView.isEnabled = true
-            composeView.isClickable = true
-            composeView.isFocusable = true
-            composeView.isFocusableInTouchMode = true
-            composeView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            composeView.isClickable = false
+            composeView.isFocusable = false
+            composeView.isFocusableInTouchMode = false
+            composeView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             composeView.alpha = 1f
             composeView.elevation = 128f
             composeView.translationZ = 128f

@@ -4,21 +4,21 @@ import android.annotation.SuppressLint
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.lifecycle.lifecycleScope
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedService.OnScopeEventListener
 import me.padi.qqlite.revived.App
-import me.padi.qqlite.revived.databinding.ActivityMainBinding
+import me.padi.qqlite.revived.compose.screens.settings.ModuleSettingsScreen
+import me.padi.qqlite.revived.compose.theme.RevivedTheme
+import me.padi.qqlite.revived.compose.theme.RevivedThemeState
 import me.padi.qqlite.revived.di.RevivedKoin
-import me.padi.qqlite.revived.shared.model.module.MainUiState
 import me.padi.qqlite.revived.shared.viewmodel.module.MainViewModel
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
 class MainActivity : ComponentActivity(), App.ServiceStateListener {
     private var service: XposedService? = null
-    private lateinit var binding: ActivityMainBinding
     private val viewModel: MainViewModel by viewModel()
 
     private val scopeCallback = object : OnScopeEventListener {
@@ -44,11 +44,28 @@ class MainActivity : ComponentActivity(), App.ServiceStateListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         RevivedKoin.ensureStarted(this)
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-        bindActions()
-        lifecycleScope.launch {
-            viewModel.uiState.collectLatest(::render)
+        setContent {
+            RevivedTheme {
+                val uiState by viewModel.uiState.collectAsState()
+                ModuleSettingsScreen(
+                    uiState = uiState,
+                    themePreference = RevivedThemeState.preference,
+                    onRequestScopeClick = ::requestScope,
+                    onReloadClick = ::hotReloadTargets,
+                    onUiModeChange = { uiMode ->
+                        RevivedThemeState.updateUiMode(this@MainActivity, uiMode)
+                    },
+                    onThemeModeChange = { mode ->
+                        RevivedThemeState.updateMode(this@MainActivity, mode)
+                    },
+                    onThemePresetChange = { preset ->
+                        RevivedThemeState.updatePreset(this@MainActivity, preset)
+                    },
+                    onLiquidGlassChange = { enabled ->
+                        RevivedThemeState.updateLiquidGlassEnabled(this@MainActivity, enabled)
+                    }
+                )
+            }
         }
     }
 
@@ -69,42 +86,29 @@ class MainActivity : ComponentActivity(), App.ServiceStateListener {
         }
     }
 
-    private fun render(state: MainUiState) {
-        binding.binder.text = state.binderText
-        binding.api.text = state.apiText
-        binding.framework.text = state.frameworkText
-        binding.frameworkVersion.text = state.frameworkVersionText
-        binding.frameworkVersionCode.text = state.frameworkVersionCodeText
-        binding.frameworkProperties.text = state.frameworkPropertiesText
-        binding.scope.text = state.scopeText
-        binding.process.text = state.processText
-        binding.reload.isEnabled = state.reloadEnabled
-    }
-
     @SuppressLint("XposedNewApi")
-    private fun bindActions() {
-        binding.reload.setOnClickListener {
-            if ((service?.apiVersion ?: 0) < 102) {
-                Toast.makeText(this, "当前框架 API 不支持热重载", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val targets = service?.runningTargets.orEmpty()
-            targets.forEach { target ->
-                service?.hotReloadModule(target, null) { process, result ->
-                    runOnUiThread {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Reload ${process.processName}, $result",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
+    private fun hotReloadTargets() {
+        val currentService = service
+        if ((currentService?.apiVersion ?: 0) < 102) {
+            Toast.makeText(this, "当前框架 API 不支持热重载", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val targets = currentService?.runningTargets.orEmpty()
+        targets.forEach { target ->
+            currentService?.hotReloadModule(target, null) { process, result ->
+                runOnUiThread {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Reload ${process.processName}, $result",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
+    }
 
-        binding.requestScope.setOnClickListener {
-            service?.requestScope(listOf(TARGET_PACKAGE), scopeCallback)
-        }
+    private fun requestScope() {
+        service?.requestScope(listOf(TARGET_PACKAGE), scopeCallback)
     }
 
     private companion object {

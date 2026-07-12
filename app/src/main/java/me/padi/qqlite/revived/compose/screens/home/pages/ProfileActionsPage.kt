@@ -23,42 +23,60 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import me.padi.qqlite.revived.compose.component.card.MiuixFeatureCard
 import me.padi.qqlite.revived.compose.screens.home.*
+import me.padi.qqlite.revived.compose.screens.settings.ModuleThemeSettingsSheet
+import me.padi.qqlite.revived.compose.theme.RevivedThemeState
+import me.padi.qqlite.revived.shared.model.home.HomeWindowInfo
 import me.padi.qqlite.revived.shared.model.home.HomeUiState
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.PressFeedbackType
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun ProfileActionsPage(
     controller: HomeUiController,
-    uiState: HomeUiState
+    uiState: HomeUiState,
+    windowInfo: HomeWindowInfo,
 ) {
+    val context = LocalContext.current
     val actions = uiState.visibleSelfActions
-    if (actions.isEmpty()) {
-        EmptyHomePage("等待个人数据")
-        return
-    }
+    var showModuleSettings by remember { mutableStateOf(false) }
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(windowInfo.profileGridColumns),
         modifier = Modifier
             .fillMaxSize()
             .overScrollVertical(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(16.dp)
+        contentPadding = PaddingValues(if (windowInfo.useNavigationRail) 20.dp else 16.dp)
     ) {
+        item(key = MODULE_SETTINGS_TITLE) {
+            GridItem(
+                title = MODULE_SETTINGS_TITLE,
+                subtitle = "打开主题与模块配置",
+                icon = Icons.Filled.Settings,
+                iconColor = MiuixTheme.colorScheme.primary,
+                onClick = {
+                    showModuleSettings = true
+                },
+                onLongClick = {
+                    showModuleSettings = true
+                }
+            )
+        }
+
         items(actions, key = { it.title }) { row ->
             val visual = profileActionVisual(row.title)
 
@@ -76,6 +94,24 @@ internal fun ProfileActionsPage(
             )
         }
     }
+
+    ModuleThemeSettingsSheet(
+        show = showModuleSettings,
+        themePreference = RevivedThemeState.preference,
+        onDismissRequest = { showModuleSettings = false },
+        onUiModeChange = { uiMode ->
+            RevivedThemeState.updateUiMode(context, uiMode)
+        },
+        onThemeModeChange = { mode ->
+            RevivedThemeState.updateMode(context, mode)
+        },
+        onThemePresetChange = { preset ->
+            RevivedThemeState.updatePreset(context, preset)
+        },
+        onLiquidGlassChange = { enabled ->
+            RevivedThemeState.updateLiquidGlassEnabled(context, enabled)
+        }
+    )
 }
 
 @Composable
@@ -87,59 +123,16 @@ private fun GridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(150.dp),
-        pressFeedbackType = PressFeedbackType.Sink,
-        showIndication = true,
+    MiuixFeatureCard(
+        title = title,
+        subtitle = subtitle,
+        icon = icon,
+        iconColor = iconColor,
+        modifier = Modifier.fillMaxWidth(),
+        minHeight = 150,
         onClick = onClick,
-        onLongPress = onLongClick,
-        colors = CardDefaults.defaultColors(
-            color = MiuixTheme.colorScheme.surfaceVariant,
-            contentColor = MiuixTheme.colorScheme.onSurface
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(20.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        color = iconColor.copy(alpha = 0.1f), shape = CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconColor,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Column {
-                Text(
-                    text = title,
-                    style = MiuixTheme.textStyles.title4,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = subtitle,
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                )
-            }
-        }
-    }
+        onLongClick = onLongClick
+    )
 }
 
 private data class ProfileActionVisual(
@@ -154,9 +147,7 @@ private fun profileActionVisual(title: String): ProfileActionVisual {
     return when (title) {
         "我" -> ProfileActionVisual(Icons.Filled.AccountCircle, colors.primary, "查看个人信息")
         "修改资料" -> ProfileActionVisual(Icons.Filled.Edit, colors.error, "修改账号资料")
-        "绑定监护人" -> ProfileActionVisual(Icons.Filled.PersonAdd, colors.primary, "管理监护关系")
-        "注销账号" -> ProfileActionVisual(Icons.Filled.Delete, colors.error, "永久删除账号")
-        "退出账号" -> ProfileActionVisual(
+            "退出账号" -> ProfileActionVisual(
             Icons.AutoMirrored.Filled.Logout,
             colors.onSurfaceVariantSummary,
             "退出当前登录"
@@ -165,5 +156,7 @@ private fun profileActionVisual(title: String): ProfileActionVisual {
         else -> ProfileActionVisual(Icons.Filled.Settings, colors.outline, "")
     }
 }
+
+private const val MODULE_SETTINGS_TITLE = "模块设置"
 
 

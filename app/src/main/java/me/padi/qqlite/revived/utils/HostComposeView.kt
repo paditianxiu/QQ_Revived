@@ -1,10 +1,10 @@
 package me.padi.qqlite.revived.utils
 
 import android.annotation.SuppressLint
-import android.content.res.AssetManager
 import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.res.AssetManager
 import android.content.res.Resources
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -28,6 +28,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import java.util.IdentityHashMap
+import me.padi.qqlite.revived.hooks.common.StatusBarHook
 
 internal fun ViewGroup.addHostComposeView(
     tag: Any,
@@ -188,6 +189,7 @@ private class HostComposeBinding(
             setBackgroundDrawable(android.graphics.Color.TRANSPARENT.toDrawable())
             clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            StatusBarHook.applyWindowStatusBarPolicy(this)
             decorView.setPadding(0, 0, 0, 0)
             setLayout(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -210,7 +212,11 @@ private class HostComposeBinding(
         }
     }
 
-    private fun createComposeHost(root: View, owner: HostComposeOwner, composeContext: Context): View {
+    private fun createComposeHost(
+        root: View,
+        owner: HostComposeOwner,
+        composeContext: Context
+    ): View {
         val composeView = createComposeView(root, owner, composeContext)
         if (!wrapInContainer) {
             composeView.tag = viewTag
@@ -243,7 +249,11 @@ private class HostComposeBinding(
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun createComposeView(root: View, owner: HostComposeOwner, composeContext: Context): ComposeView {
+    private fun createComposeView(
+        root: View,
+        owner: HostComposeOwner,
+        composeContext: Context
+    ): ComposeView {
         return ComposeView(composeContext).apply {
             owner.install(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
@@ -494,7 +504,10 @@ private class HostComposeOwner : LifecycleOwner,
                 ViewTreeOwnerBridge.setLifecycleOwner(view, previous.lifecycleOwner)
             }
             if (ViewTreeOwnerBridge.getSavedStateRegistryOwner(view) === this) {
-                ViewTreeOwnerBridge.setSavedStateRegistryOwner(view, previous.savedStateRegistryOwner)
+                ViewTreeOwnerBridge.setSavedStateRegistryOwner(
+                    view,
+                    previous.savedStateRegistryOwner
+                )
             }
             if (ViewTreeOwnerBridge.getViewModelStoreOwner(view) === this) {
                 ViewTreeOwnerBridge.setViewModelStoreOwner(view, previous.viewModelStoreOwner)

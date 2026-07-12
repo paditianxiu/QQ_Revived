@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,26 +36,27 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import me.padi.qqlite.revived.compose.component.card.MiuixFeatureCard
+import me.padi.qqlite.revived.compose.component.state.MiuixCountHeader
 import me.padi.qqlite.revived.compose.screens.home.HomeListRow
 import me.padi.qqlite.revived.compose.screens.home.HomeUiController
 import me.padi.qqlite.revived.compose.screens.home.PersistListScroll
 import me.padi.qqlite.revived.compose.screens.home.rememberHomeListState
 import me.padi.qqlite.revived.shared.model.home.ContactRow
+import me.padi.qqlite.revived.shared.model.home.HomeWindowInfo
 import me.padi.qqlite.revived.shared.model.home.HomeUiState
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.PressFeedbackType
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun ContactsPage(
-    controller: HomeUiController, uiState: HomeUiState
+    controller: HomeUiController,
+    uiState: HomeUiState,
+    windowInfo: HomeWindowInfo,
 ) {
     val rows = uiState.contacts
     if (rows.isEmpty()) {
@@ -64,7 +66,7 @@ internal fun ContactsPage(
     val shortcutRows = rows.filter { it.isContactShortcut() }.sortedBy { it.shortcutOrder() }
     val contactRows = rows.filterNot { it.isContactShortcut() }
     var searchText by remember { mutableStateOf("") }
-    var searchExpanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
     val query = searchText.trim()
     val filteredContactRows = remember(contactRows, query) {
         if (query.isBlank()) {
@@ -84,10 +86,9 @@ internal fun ContactsPage(
         ContactSearchBar(
             query = searchText,
             onQueryChange = { searchText = it },
-            expanded = searchExpanded,
-            onExpandedChange = { searchExpanded = it },
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
         )
-
 
         LazyColumn(
             modifier = Modifier
@@ -95,14 +96,18 @@ internal fun ContactsPage(
                 .overScrollVertical(),
             state = listState,
             contentPadding = PaddingValues(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(windowInfo.listItemSpacing)
         ) {
             item(key = "contacts-top-spacer") {
                 Spacer(modifier = Modifier.height(8.dp))
             }
             if (query.isBlank() && shortcutRows.isNotEmpty()) {
                 item(key = "contact-function-title") {
-                    SmallTitle(text = "功能")
+                    MiuixCountHeader(
+                        title = "功能",
+                        count = shortcutRows.size,
+                        modifier = Modifier.padding(end = 12.dp)
+                    )
                 }
                 item(key = "contact-shortcuts") {
                     ContactShortcutRow(controller, shortcutRows)
@@ -181,7 +186,6 @@ private fun ContactSearchBar(
     ) {
     }
 }
-
 private fun ContactRow.isContactShortcut(): Boolean {
     return title == "加好友/群聊" || title == "我的通知" || type == "添加" || type == "通知"
 }
@@ -198,24 +202,7 @@ private fun ContactRow.shortcutOrder(): Int {
 private fun ContactListHeader(
     title: String, count: Int
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(end = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(modifier = Modifier.weight(1f)) {
-            SmallTitle(text = title)
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = count.toString(),
-                style = MiuixTheme.textStyles.title4,
-                color = MiuixTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
+    MiuixCountHeader(title = title, count = count, modifier = Modifier.padding(end = 12.dp))
 }
 
 @Composable
@@ -286,51 +273,16 @@ private fun ContactShortcutCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    Card(
+    MiuixFeatureCard(
+        title = title,
+        subtitle = subtitle,
+        icon = icon,
+        iconColor = iconColor,
         modifier = modifier,
-        pressFeedbackType = PressFeedbackType.Sink,
-        showIndication = true,
+        minHeight = 124,
         onClick = onClick,
-        onLongPress = onLongClick,
-        colors = CardDefaults.defaultColors(
-            color = MiuixTheme.colorScheme.surfaceVariant,
-            contentColor = MiuixTheme.colorScheme.onSurface
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .background(iconColor.copy(alpha = 0.1f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconColor,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-            Column {
-                Text(
-                    text = title,
-                    style = MiuixTheme.textStyles.title4,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = subtitle,
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                )
-            }
-        }
-    }
+        onLongClick = onLongClick
+    )
 }
 
 private data class ContactShortcutVisual(

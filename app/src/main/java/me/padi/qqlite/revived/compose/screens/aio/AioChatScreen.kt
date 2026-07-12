@@ -1,12 +1,9 @@
 package me.padi.qqlite.revived.compose.screens.aio
 
-import android.app.Activity
 import android.content.Context
 import android.graphics.drawable.Drawable
 import android.net.Uri
-import android.os.Build
 import android.view.View
-import android.view.WindowInsetsController
 import android.widget.ImageView
 import android.widget.VideoView
 import androidx.compose.animation.AnimatedContent
@@ -85,7 +82,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -105,10 +101,20 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
 import com.github.panpf.zoomimage.CoilZoomAsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import me.padi.qqlite.revived.compose.theme.ApplyTransparentSystemBars
+import me.padi.qqlite.revived.compose.theme.RevivedTheme
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionCategory
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionItem
 import me.padi.qqlite.revived.shared.model.aio.AioEmotionKind
@@ -119,6 +125,7 @@ import me.padi.qqlite.revived.shared.model.aio.AioMessageBadge
 import me.padi.qqlite.revived.shared.model.aio.AioMessageKind
 import me.padi.qqlite.revived.shared.model.aio.AioPeer
 import me.padi.qqlite.revived.shared.model.home.AvatarSpec
+import me.padi.qqlite.revived.shared.model.ui.AioWindowInfo
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.DropdownImpl
@@ -132,10 +139,8 @@ import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.theme.ThemeController
 import top.yukonga.miuix.kmp.window.WindowBottomSheet
 import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.window.WindowListPopup
@@ -152,17 +157,35 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 internal fun AioChatScreen(controller: AioUiController) {
     val uiState by controller.uiState.collectAsState()
     val pagingMessages = controller.pagingMessages.collectAsLazyPagingItems()
+    val density = LocalDensity.current
+    val containerSize = LocalWindowInfo.current.containerSize
+    val windowInfo = remember(containerSize, density) {
+        with(density) {
+            AioWindowInfo.create(
+                width = containerSize.width.toDp(),
+                height = containerSize.height.toDp()
+            )
+        }
+    }
 
-    MiuixTheme(
-        controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.System) }) {
+    RevivedTheme {
         var showEmojiSheet by remember { mutableStateOf(false) }
         var showPbDialog by remember { mutableStateOf(false) }
         var pbJsonText by remember { mutableStateOf("") }
         var previewMessage by remember { mutableStateOf<AioMessage?>(null) }
-        ApplyAioEdgeToEdge()
+        val chatBackgroundColor = MiuixTheme.colorScheme.secondaryVariant
+        val topBarBackdrop = rememberLayerBackdrop {
+            drawRect(chatBackgroundColor)
+            drawContent()
+        }
+        ApplyTransparentSystemBars(MiuixTheme.colorScheme.surface)
         Scaffold(topBar = {
             AioTopBar(
-                peer = uiState.peer, avatar = uiState.peerAvatar, controller = controller
+                peer = uiState.peer,
+                avatar = uiState.peerAvatar,
+                controller = controller,
+                windowInfo = windowInfo,
+                backdrop = topBarBackdrop,
             )
         }, bottomBar = {
             AioInputBar(
@@ -170,13 +193,15 @@ internal fun AioChatScreen(controller: AioUiController) {
                 onDraftChanged = controller::updateDraft,
                 onEmojiClick = { showEmojiSheet = true },
                 onPbClick = { showPbDialog = true },
-                onSendClick = controller::sendDraft
+                onSendClick = controller::sendDraft,
+                windowInfo = windowInfo
             )
         }) { padding ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MiuixTheme.colorScheme.secondaryVariant)
+                    .background(chatBackgroundColor)
+                    .layerBackdrop(topBarBackdrop)
                     .padding(padding)
             ) {
                 if (uiState.loading && pagingMessages.itemCount == 0) {
@@ -195,6 +220,7 @@ internal fun AioChatScreen(controller: AioUiController) {
                             controller.rememberLongPressAnchor(anchor)
                             controller.longClickMessage(message)
                         },
+                        windowInfo = windowInfo,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -210,6 +236,7 @@ internal fun AioChatScreen(controller: AioUiController) {
             categories = uiState.emotionCategories,
             controller = controller,
             onDismissRequest = { showEmojiSheet = false },
+            windowInfo = windowInfo,
             onEmotionClick = { item ->
                 controller.clickEmotion(item)
                 showEmojiSheet = false
@@ -236,208 +263,154 @@ internal fun AioChatScreen(controller: AioUiController) {
     }
 }
 
-@Suppress("DEPRECATION")
-@Composable
-private fun ApplyAioEdgeToEdge() {
-    val view = LocalView.current
-    val backgroundColor = MiuixTheme.colorScheme.secondaryVariant
-    val useLightSystemBars = backgroundColor.luminance() > 0.5f
-    DisposableEffect(view, backgroundColor, useLightSystemBars) {
-        val activity = view.context.findActivity()
-        val window = activity?.window
-        val oldStatusBarColor = window?.statusBarColor
-        val oldNavigationBarColor = window?.navigationBarColor
-        val oldSystemUiVisibility = window?.decorView?.systemUiVisibility
-        val oldNavigationContrast = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window?.isNavigationBarContrastEnforced
-        } else {
-            null
-        }
-        val oldStatusContrast = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window?.isStatusBarContrastEnforced
-        } else {
-            null
-        }
-
-        if (window != null) {
-            window.statusBarColor = AndroidColor.TRANSPARENT
-            window.navigationBarColor = AndroidColor.TRANSPARENT
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                window.isNavigationBarContrastEnforced = false
-                window.isStatusBarContrastEnforced = false
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                window.setDecorFitsSystemWindows(false)
-                window.insetsController?.setSystemBarsAppearance(
-                    if (useLightSystemBars) {
-                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-                    } else {
-                        0
-                    },
-                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-                )
-            }
-            val lightFlags = if (useLightSystemBars) {
-                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-            } else {
-                0
-            }
-            window.decorView.systemUiVisibility =
-                (window.decorView.systemUiVisibility and (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()) or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or lightFlags
-        }
-
-        onDispose {
-            if (window != null) {
-                if (oldStatusBarColor != null) window.statusBarColor = oldStatusBarColor
-                if (oldNavigationBarColor != null) window.navigationBarColor = oldNavigationBarColor
-                if (oldSystemUiVisibility != null) {
-                    window.decorView.systemUiVisibility = oldSystemUiVisibility
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    if (oldNavigationContrast != null) {
-                        window.isNavigationBarContrastEnforced = oldNavigationContrast
-                    }
-                    if (oldStatusContrast != null) {
-                        window.isStatusBarContrastEnforced = oldStatusContrast
-                    }
-                }
-            }
-        }
-    }
-}
-
-private tailrec fun Context.findActivity(): Activity? {
-    return when (this) {
-        is Activity -> this
-        is android.content.ContextWrapper -> baseContext.findActivity()
-        else -> null
-    }
-}
-
 @Composable
 private fun AioTopBar(
-    peer: AioPeer, avatar: AvatarSpec?, controller: AioUiController
+    peer: AioPeer,
+    avatar: AvatarSpec?,
+    controller: AioUiController,
+    windowInfo: AioWindowInfo,
+    backdrop: Backdrop,
 ) {
+    val topBarSurfaceColor = MiuixTheme.colorScheme.surface
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MiuixTheme.colorScheme.surface)
+            .clip(RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp))
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp) },
+                effects = {
+                    vibrancy()
+                    blur(18.dp.toPx())
+                    lens(28.dp.toPx(), 18.dp.toPx())
+                },
+                highlight = {
+                    Highlight.Default.copy(alpha = 0.24f)
+                },
+                onDrawSurface = {
+                    drawRect(topBarSurfaceColor.copy(alpha = 0.42f))
+                }
+            )
+            .background(Color.Transparent)
             .statusBarsPadding()
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(58.dp)
-                .padding(horizontal = 10.dp),
+                .height(windowInfo.topBarHeight)
+                .padding(horizontal = windowInfo.topBarHorizontalPadding),
         ) {
-            IconButton(
-                onClick = controller::navigateBack,
-                minWidth = 42.dp,
-                minHeight = 42.dp,
-                cornerRadius = 21.dp,
-                backgroundColor = MiuixTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.align(Alignment.CenterStart)
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
-                    tint = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
             Row(
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 54.dp, end = 132.dp)
-                    .clickable(onClick = controller::openPeerPanel),
+                    .fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Start
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                AioAvatar(
-                    controller = controller,
-                    spec = avatar,
-                    fallback = peer.displayName.take(1),
-                    size = 38
-                )
-                Spacer(modifier = Modifier.width(9.dp))
-                AnimatedContent(
-                    targetState = peer.displayName, transitionSpec = {
-                        fadeIn(animationSpec = tween(150)) togetherWith fadeOut(
-                            animationSpec = tween(
-                                90
-                            )
-                        )
-                    }, label = "aioTitle"
-                ) { title ->
-                    Column(
-                        modifier = Modifier.widthIn(max = 172.dp),
-                        horizontalAlignment = Alignment.Start
-                    ) {
-                        Text(
-                            text = title,
-                            style = MiuixTheme.textStyles.title4,
-                            color = MiuixTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = peer.peerId,
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (peer.chatType == 1) {
-                    IconButton(
-                        onClick = controller::startVoiceCall,
-                        minWidth = 40.dp,
-                        minHeight = 40.dp,
-                        cornerRadius = 20.dp,
-                        backgroundColor = Color.Transparent
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Mic,
-                            contentDescription = "语音通话",
-                            tint = MiuixTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = controller::startVideoCall,
-                        minWidth = 40.dp,
-                        minHeight = 40.dp,
-                        cornerRadius = 20.dp,
-                        backgroundColor = Color.Transparent
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Videocam,
-                            contentDescription = "视频通话",
-                            tint = MiuixTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
                 IconButton(
-                    onClick = controller::openPeerPanel,
-                    minWidth = 40.dp,
-                    minHeight = 40.dp,
-                    cornerRadius = 20.dp,
-                    backgroundColor = Color.Transparent
+                    onClick = controller::navigateBack,
+                    minWidth = 42.dp,
+                    minHeight = 42.dp,
+                    cornerRadius = 21.dp,
+                    backgroundColor = MiuixTheme.colorScheme.surfaceVariant
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "聊天详情",
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回",
                         tint = MiuixTheme.colorScheme.onSurface,
                         modifier = Modifier.size(20.dp)
                     )
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = controller::openPeerPanel),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AioAvatar(
+                        controller = controller,
+                        spec = avatar,
+                        fallback = peer.displayName.take(1),
+                        size = 38
+                    )
+                    Spacer(modifier = Modifier.width(9.dp))
+                    AnimatedContent(
+                        targetState = peer.displayName,
+                        transitionSpec = {
+                            fadeIn(animationSpec = tween(150)) togetherWith fadeOut(
+                                animationSpec = tween(90)
+                            )
+                        },
+                        label = "aioTitle"
+                    ) { title ->
+                        Column(
+                            modifier = Modifier.widthIn(max = windowInfo.titleMaxWidth),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            Text(
+                                text = title,
+                                style = MiuixTheme.textStyles.title4,
+                                color = MiuixTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = peer.peerId,
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (peer.chatType == 1) {
+                        IconButton(
+                            onClick = controller::startVoiceCall,
+                            minWidth = 40.dp,
+                            minHeight = 40.dp,
+                            cornerRadius = 20.dp,
+                            backgroundColor = Color.Transparent
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Mic,
+                                contentDescription = "语音通话",
+                                tint = MiuixTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = controller::startVideoCall,
+                            minWidth = 40.dp,
+                            minHeight = 40.dp,
+                            cornerRadius = 20.dp,
+                            backgroundColor = Color.Transparent
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Videocam,
+                                contentDescription = "视频通话",
+                                tint = MiuixTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = controller::openPeerPanel,
+                        minWidth = 40.dp,
+                        minHeight = 40.dp,
+                        cornerRadius = 20.dp,
+                        backgroundColor = Color.Transparent
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "聊天详情",
+                            tint = MiuixTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }
@@ -461,6 +434,7 @@ private fun AioMessageList(
     controller: AioUiController,
     onPreviewMessage: (AioMessage) -> Unit,
     onLongPressMessage: (AioMessage, IntOffset) -> Unit,
+    windowInfo: AioWindowInfo,
     modifier: Modifier = Modifier
 ) {
     val snapshotMessages = messages.itemSnapshotList.items
@@ -577,8 +551,11 @@ private fun AioMessageList(
     LazyColumn(
         modifier = modifier,
         state = listState,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        contentPadding = PaddingValues(
+            horizontal = windowInfo.listHorizontalPadding,
+            vertical = windowInfo.listVerticalPadding
+        ),
+        verticalArrangement = Arrangement.spacedBy(windowInfo.listItemSpacing)
     ) {
         item(key = "aio-load-older") {
             LoadOlderIndicator(loadingOlder)
@@ -593,7 +570,8 @@ private fun AioMessageList(
                     renderRevision = renderRevision,
                     controller = controller,
                     onPreviewMessage = onPreviewMessage,
-                    onLongPressMessage = onLongPressMessage
+                    onLongPressMessage = onLongPressMessage,
+                    windowInfo = windowInfo
                 )
             }
         }
@@ -637,7 +615,8 @@ private fun AioMessageRow(
     renderRevision: Long,
     controller: AioUiController,
     onPreviewMessage: (AioMessage) -> Unit,
-    onLongPressMessage: (AioMessage, IntOffset) -> Unit
+    onLongPressMessage: (AioMessage, IntOffset) -> Unit,
+    windowInfo: AioWindowInfo,
 ) {
     if (message.renderKind == AioMessageKind.Tip) {
         TipMessage(message.text)
@@ -681,7 +660,7 @@ private fun AioMessageRow(
                     controller = controller,
                     onPreviewMessage = onPreviewMessage,
                     onLongPressMessage = onLongPressMessage,
-                    modifier = Modifier.widthIn(max = 292.dp)
+                    modifier = Modifier.widthIn(max = windowInfo.bubbleMaxWidth)
                 )
                 MessageTypeCard(
                     message = message,
@@ -1596,84 +1575,97 @@ private fun AioInputBar(
     onDraftChanged: (String) -> Unit,
     onEmojiClick: () -> Unit,
     onPbClick: () -> Unit,
-    onSendClick: () -> Unit
+    onSendClick: () -> Unit,
+    windowInfo: AioWindowInfo,
 ) {
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(MiuixTheme.colorScheme.surface)
             .imePadding()
             .navigationBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(22.dp))
-                .background(MiuixTheme.colorScheme.surfaceVariant)
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onEmojiClick,
-                    onLongClick = {}), contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .widthIn(max = windowInfo.emojiSheetMaxWidth)
+                .align(Alignment.Center)
+                .padding(
+                    horizontal = windowInfo.inputHorizontalPadding,
+                    vertical = windowInfo.inputVerticalPadding
+                ),
+            verticalAlignment = Alignment.Bottom
         ) {
-            Icon(
-                imageVector = Icons.Filled.EmojiEmotions,
-                contentDescription = "表情",
-                tint = MiuixTheme.colorScheme.onSurface,
-                modifier = Modifier.size(22.dp)
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(MiuixTheme.colorScheme.surfaceVariant)
+                    .combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onEmojiClick,
+                        onLongClick = {}
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.EmojiEmotions,
+                    contentDescription = "表情",
+                    tint = MiuixTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            IconButton(
+                onClick = onPbClick,
+                minWidth = 44.dp,
+                minHeight = 44.dp,
+                cornerRadius = 22.dp,
+                backgroundColor = MiuixTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DataObject,
+                    contentDescription = "ProtoBuf",
+                    tint = MiuixTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            TextField(
+                value = draft,
+                onValueChange = onDraftChanged,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 8.dp, end = 8.dp)
+                    .heightIn(min = 44.dp, max = windowInfo.inputMaxHeight),
+                insideMargin = DpSize(13.dp, 10.dp),
+                cornerRadius = 22.dp,
+                label = "消息",
+                useLabelAsPlaceholder = true,
+                singleLine = false,
+                minLines = 1,
+                maxLines = 4,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences
+                ),
+                textStyle = MiuixTheme.textStyles.main.copy(fontSize = 14.sp)
             )
-        }
-        IconButton(
-            onClick = onPbClick,
-            minWidth = 44.dp,
-            minHeight = 44.dp,
-            cornerRadius = 22.dp,
-            backgroundColor = MiuixTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.padding(start = 8.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.DataObject,
-                contentDescription = "ProtoBuf",
-                tint = MiuixTheme.colorScheme.onSurface,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        TextField(
-            value = draft,
-            onValueChange = onDraftChanged,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 8.dp, end = 8.dp)
-                .heightIn(min = 44.dp, max = 112.dp),
-            insideMargin = DpSize(13.dp, 10.dp),
-            cornerRadius = 22.dp,
-            label = "消息",
-            useLabelAsPlaceholder = true,
-            singleLine = false,
-            minLines = 1,
-            maxLines = 4,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Sentences
-            ),
-            textStyle = MiuixTheme.textStyles.main.copy(fontSize = 14.sp)
-        )
-        Button(
-            onClick = onSendClick,
-            enabled = draft.isNotBlank(),
-            minWidth = 44.dp,
-            minHeight = 44.dp,
-            cornerRadius = 22.dp,
-            insideMargin = PaddingValues(0.dp),
-            colors = ButtonDefaults.buttonColorsPrimary()
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = "发送",
-                tint = MiuixTheme.colorScheme.onPrimary,
-                modifier = Modifier.size(20.dp)
-            )
+            Button(
+                onClick = onSendClick,
+                enabled = draft.isNotBlank(),
+                minWidth = 44.dp,
+                minHeight = 44.dp,
+                cornerRadius = 22.dp,
+                insideMargin = PaddingValues(0.dp),
+                colors = ButtonDefaults.buttonColorsPrimary()
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "发送",
+                    tint = MiuixTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }
@@ -1800,6 +1792,7 @@ private fun AioEmojiSheet(
     categories: List<AioEmotionCategory>,
     controller: AioUiController,
     onDismissRequest: () -> Unit,
+    windowInfo: AioWindowInfo,
     onEmotionClick: (AioEmotionItem) -> Unit
 ) {
     val density = LocalDensity.current
@@ -1838,28 +1831,37 @@ private fun AioEmojiSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = maxSheetHeight)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            TabRowWithContour(
-                tabs = tabs,
-                selectedTabIndex = selectedTabIndex,
-                onTabSelected = { selectedTabIndex = it })
-            val category =
-                visibleCategories.getOrNull(selectedTabIndex) ?: visibleCategories.first()
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp, max = maxGridHeight)
-                    .padding(top = 12.dp)
+                    .widthIn(max = windowInfo.emojiSheetMaxWidth)
             ) {
-                AioEmojiCategoryGrid(
-                    category = category,
-                    controller = controller,
+                TabRowWithContour(
+                    tabs = tabs,
+                    selectedTabIndex = selectedTabIndex,
+                    onTabSelected = { selectedTabIndex = it }
+                )
+                val category =
+                    visibleCategories.getOrNull(selectedTabIndex) ?: visibleCategories.first()
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = maxGridHeight),
-                    onEmotionClick = onEmotionClick
-                )
+                        .heightIn(min = 120.dp, max = maxGridHeight)
+                        .padding(top = 12.dp)
+                ) {
+                    AioEmojiCategoryGrid(
+                        category = category,
+                        controller = controller,
+                        windowInfo = windowInfo,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = maxGridHeight),
+                        onEmotionClick = onEmotionClick
+                    )
+                }
             }
         }
     }
@@ -1869,6 +1871,7 @@ private fun AioEmojiSheet(
 private fun AioEmojiCategoryGrid(
     category: AioEmotionCategory,
     controller: AioUiController,
+    windowInfo: AioWindowInfo,
     modifier: Modifier = Modifier,
     onEmotionClick: (AioEmotionItem) -> Unit
 ) {
@@ -1883,7 +1886,13 @@ private fun AioEmojiCategoryGrid(
     }
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(if (category.key.contains("system")) 5 else 3),
+        columns = GridCells.Fixed(
+            if (category.key.contains("system")) {
+                windowInfo.emojiSystemColumns
+            } else {
+                windowInfo.emojiPackColumns
+            }
+        ),
         modifier = Modifier
             .then(modifier)
             .fillMaxWidth()

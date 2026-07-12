@@ -30,31 +30,42 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import me.padi.qqlite.revived.compose.theme.RevivedTheme
+import me.padi.qqlite.revived.shared.model.ui.QavWindowInfo
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.theme.ThemeController
 
 @Composable
 internal fun QavCallScreen(controller: QavUiController) {
     val uiState by controller.uiState.collectAsState()
     val hostAvatarView = controller.obtainAvatarHostView()
+    val density = LocalDensity.current
+    val containerSize = LocalWindowInfo.current.containerSize
+    val windowInfo = remember(containerSize, density) {
+        with(density) {
+            QavWindowInfo.create(
+                width = containerSize.width.toDp(),
+                height = containerSize.height.toDp()
+            )
+        }
+    }
 
-    MiuixTheme(
-        controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.System) }
-    ) {
+    RevivedTheme {
         if (uiState.isVideoCall) {
             VideoCallScreen(
                 uiState = uiState,
                 avatarView = hostAvatarView,
                 videoView = controller.obtainVideoHostView(),
+                windowInfo = windowInfo,
                 onToggleMic = controller::toggleMic,
                 onToggleCamera = controller::toggleCamera,
                 onHangUp = controller::hangUp
@@ -63,6 +74,7 @@ internal fun QavCallScreen(controller: QavUiController) {
             VoiceCallScreen(
                 uiState = uiState,
                 avatarView = hostAvatarView,
+                windowInfo = windowInfo,
                 onToggleMic = controller::toggleMic,
                 onHangUp = controller::hangUp
             )
@@ -75,6 +87,7 @@ private fun VideoCallScreen(
     uiState: QavUiState,
     avatarView: View?,
     videoView: View?,
+    windowInfo: QavWindowInfo,
     onToggleMic: () -> Unit,
     onToggleCamera: () -> Unit,
     onHangUp: () -> Unit
@@ -107,17 +120,21 @@ private fun VideoCallScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 20.dp)
+                .padding(
+                    horizontal = windowInfo.horizontalPadding,
+                    vertical = windowInfo.verticalPadding
+                )
         ) {
             Spacer(modifier = Modifier.weight(1f))
             VideoIdentityBlock(
                 uiState = uiState,
-                avatarView = avatarView
+                avatarView = avatarView,
+                windowInfo = windowInfo
             )
             Text(
                 text = uiState.statusText,
                 color = Color(0xE6FFFFFF),
-                fontSize = 13.sp,
+                fontSize = windowInfo.statusTextSize.value.sp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp, bottom = 18.dp),
@@ -125,6 +142,7 @@ private fun VideoCallScreen(
             )
             VideoControlBar(
                 uiState = uiState,
+                windowInfo = windowInfo,
                 onToggleMic = onToggleMic,
                 onToggleCamera = onToggleCamera,
                 onHangUp = onHangUp
@@ -137,6 +155,7 @@ private fun VideoCallScreen(
 private fun VoiceCallScreen(
     uiState: QavUiState,
     avatarView: View?,
+    windowInfo: QavWindowInfo,
     onToggleMic: () -> Unit,
     onHangUp: () -> Unit
 ) {
@@ -157,7 +176,10 @@ private fun VoiceCallScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 20.dp)
+                .padding(
+                    horizontal = windowInfo.horizontalPadding,
+                    vertical = windowInfo.verticalPadding
+                )
         ) {
             Spacer(modifier = Modifier.weight(1f))
             Column(
@@ -167,12 +189,12 @@ private fun VoiceCallScreen(
                 HostAvatar(
                     avatarView = avatarView,
                     fallback = uiState.peerName,
-                    modifier = Modifier.size(88.dp)
+                    modifier = Modifier.size(windowInfo.voiceAvatarSize)
                 )
                 Text(
                     text = uiState.peerName,
                     color = Color.White,
-                    fontSize = 24.sp,
+                    fontSize = windowInfo.peerNameSize.value.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(top = 18.dp)
                 )
@@ -187,13 +209,14 @@ private fun VoiceCallScreen(
                 Text(
                     text = uiState.statusText,
                     color = Color(0xE6FFFFFF),
-                    fontSize = 14.sp,
+                    fontSize = (windowInfo.statusTextSize.value + 1f).sp,
                     modifier = Modifier.padding(top = 14.dp)
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
             VoiceControlBar(
                 micEnabled = uiState.micEnabled,
+                windowInfo = windowInfo,
                 onToggleMic = onToggleMic,
                 onHangUp = onHangUp
             )
@@ -204,7 +227,8 @@ private fun VoiceCallScreen(
 @Composable
 private fun VideoIdentityBlock(
     uiState: QavUiState,
-    avatarView: View?
+    avatarView: View?,
+    windowInfo: QavWindowInfo,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -214,7 +238,7 @@ private fun VideoIdentityBlock(
         HostAvatar(
             avatarView = avatarView,
             fallback = uiState.peerName,
-            modifier = Modifier.size(42.dp)
+            modifier = Modifier.size(windowInfo.videoIdentityAvatarSize)
         )
         Column(
             modifier = Modifier.padding(start = 12.dp),
@@ -223,7 +247,7 @@ private fun VideoIdentityBlock(
             Text(
                 text = uiState.peerName,
                 color = Color.White,
-                fontSize = 18.sp,
+                fontSize = (windowInfo.peerNameSize.value - 6f).sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -244,6 +268,7 @@ private fun VideoIdentityBlock(
 @Composable
 private fun VideoControlBar(
     uiState: QavUiState,
+    windowInfo: QavWindowInfo,
     onToggleMic: () -> Unit,
     onToggleCamera: () -> Unit,
     onHangUp: () -> Unit
@@ -259,18 +284,21 @@ private fun VideoControlBar(
             icon = if (uiState.micEnabled) Icons.Filled.Mic else Icons.Filled.MicOff,
             label = if (uiState.micEnabled) "麦克风已开" else "麦克风已关",
             background = if (uiState.micEnabled) Color(0x26FFFFFF) else Color(0xCC334155),
+            windowInfo = windowInfo,
             onClick = onToggleMic
         )
         ControlButton(
             icon = if (uiState.cameraEnabled) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
             label = if (uiState.cameraEnabled) "摄像头已开" else "摄像头已关",
             background = if (uiState.cameraEnabled) Color(0x26FFFFFF) else Color(0xCC334155),
+            windowInfo = windowInfo,
             onClick = onToggleCamera
         )
         ControlButton(
             icon = Icons.Filled.CallEnd,
             label = "挂断",
             background = Color(0xFFE5484D),
+            windowInfo = windowInfo,
             onClick = onHangUp
         )
     }
@@ -279,6 +307,7 @@ private fun VideoControlBar(
 @Composable
 private fun VoiceControlBar(
     micEnabled: Boolean,
+    windowInfo: QavWindowInfo,
     onToggleMic: () -> Unit,
     onHangUp: () -> Unit
 ) {
@@ -293,12 +322,14 @@ private fun VoiceControlBar(
             icon = if (micEnabled) Icons.Filled.Mic else Icons.Filled.MicOff,
             label = if (micEnabled) "麦克风已开" else "麦克风已关",
             background = if (micEnabled) Color(0x26FFFFFF) else Color(0xCC334155),
+            windowInfo = windowInfo,
             onClick = onToggleMic
         )
         ControlButton(
             icon = Icons.Filled.CallEnd,
             label = "挂断",
             background = Color(0xFFE5484D),
+            windowInfo = windowInfo,
             onClick = onHangUp
         )
     }
@@ -309,31 +340,32 @@ private fun ControlButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     background: Color,
+    windowInfo: QavWindowInfo,
     onClick: () -> Unit
 ) {
     Column(
-        modifier = Modifier.padding(horizontal = 10.dp),
+        modifier = Modifier.padding(horizontal = windowInfo.controlSpacing / 2),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         IconButton(
             onClick = onClick,
-            minWidth = 58.dp,
-            minHeight = 58.dp,
-            cornerRadius = 29.dp,
+            minWidth = windowInfo.controlButtonSize,
+            minHeight = windowInfo.controlButtonSize,
+            cornerRadius = windowInfo.controlButtonSize / 2,
             backgroundColor = background
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
                 tint = Color.White,
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(windowInfo.controlIconSize)
             )
         }
         Text(
             text = label,
             color = Color(0xCCFFFFFF),
             fontSize = 11.sp,
-            modifier = Modifier.padding(top = 8.dp)
+            modifier = Modifier.padding(top = windowInfo.controlLabelTopPadding)
         )
     }
 }

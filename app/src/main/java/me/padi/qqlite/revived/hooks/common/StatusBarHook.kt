@@ -168,11 +168,11 @@ internal object StatusBarHook : BaseHook() {
     }
 
     fun applyStatusBarPolicy(activity: Activity) {
-        applyStatusBarPolicy(activity.window)
+        applyWindowStatusBarPolicy(activity.window)
     }
 
     @Suppress("DEPRECATION")
-    private fun applyStatusBarPolicy(window: Window) {
+    internal fun applyWindowStatusBarPolicy(window: Window) {
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
         window.statusBarColor = Color.TRANSPARENT

@@ -44,7 +44,11 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImagePainter
 import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
+import me.padi.qqlite.revived.compose.component.avatar.HostAvatar
+import me.padi.qqlite.revived.compose.component.avatar.ImageLoadingIndicator
+import me.padi.qqlite.revived.compose.component.avatar.rememberImageRequest
 import me.padi.qqlite.revived.compose.screens.home.*
+import me.padi.qqlite.revived.shared.model.home.HomeWindowInfo
 import me.padi.qqlite.revived.shared.model.home.HomeUiState
 import me.padi.qqlite.revived.shared.model.home.PictureSpec
 import me.padi.qqlite.revived.shared.model.home.QZoneFeedRow
@@ -65,7 +69,8 @@ private const val QZONE_SHEET_IMAGE_PAGE_SIZE = 18
 @Composable
 internal fun QZoneFeedPage(
     controller: HomeUiController,
-    uiState: HomeUiState
+    uiState: HomeUiState,
+    windowInfo: HomeWindowInfo,
 ) {
     val rows = uiState.qzoneFeeds
     if (rows.isEmpty()) {
@@ -91,7 +96,7 @@ internal fun QZoneFeedPage(
             .overScrollVertical(),
         state = listState,
         contentPadding = PaddingValues(bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(windowInfo.listItemSpacing)
     ) {
         item(key = "qzone-top-spacer") {
             Spacer(modifier = Modifier.height(8.dp))

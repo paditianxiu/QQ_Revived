@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.Fragment
 import me.padi.qqlite.revived.ModuleMainKt
+import me.padi.qqlite.revived.compose.theme.RevivedTheme
 import me.padi.qqlite.revived.hooks.aio.AioBinding
 import me.padi.qqlite.revived.hooks.aio.AioRuntimeStore
 import me.padi.qqlite.revived.shared.model.aio.AioLongPressMenuItem
@@ -33,9 +34,6 @@ import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.ListPopupColumn
 import top.yukonga.miuix.kmp.basic.ListPopupDefaults
 import top.yukonga.miuix.kmp.basic.PopupPositionProvider
-import top.yukonga.miuix.kmp.theme.ColorSchemeMode
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.theme.ThemeController
 import top.yukonga.miuix.kmp.window.WindowListPopup
 import java.lang.ref.WeakReference
 import kotlin.math.roundToInt
@@ -237,9 +235,7 @@ private fun HostLongPressPopup(
     items: List<HostLongPressMenuItem>,
     onDismissRequest: () -> Unit
 ) {
-    MiuixTheme(
-        controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.System) }
-    ) {
+    RevivedTheme {
         val popupPositionProvider = remember(anchor) {
             touchAnchorPositionProvider(anchor)
         }

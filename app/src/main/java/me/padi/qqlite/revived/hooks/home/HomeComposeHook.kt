@@ -266,20 +266,27 @@ internal object HomeComposeHook : BaseHook() {
         HomeRuntimeStore.latestBinding = WeakReference(binding)
         loadCachedHomeProfile(context)
 
-        if (existingBinding != null && findViewWithTag<View>(HOME_COMPOSE_TAG) != null) {
+        val mountRoot = findActivityContentRoot() ?: this
+        if (mountRoot !== this) {
+            findViewWithTag<View>(HOME_COMPOSE_TAG)?.let(::removeView)
+        }
+
+        if (existingBinding != null && mountRoot.findViewWithTag<View>(HOME_COMPOSE_TAG) != null) {
             return
         }
 
-        addHostComposeView(
+        mountRoot.addHostComposeView(
             tag = HOME_COMPOSE_TAG,
             bindingKey = HOME_COMPOSE_BINDING_KEY,
             layoutParamsFactory = { createFullComposeLayoutParams() },
+            lifecycleAnchor = this,
             configure = {
                 isClickable = true
                 isFocusable = true
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
                 elevation = 64f
                 translationZ = 64f
+                alpha = 1f
             },
             onOwnerReady = { owner ->
                 binding.attachViewModel(owner)
@@ -311,4 +318,8 @@ internal object HomeComposeHook : BaseHook() {
         }
     }
 
+}
+
+private fun View.findActivityContentRoot(): ViewGroup? {
+    return rootView?.findViewById(android.R.id.content)
 }

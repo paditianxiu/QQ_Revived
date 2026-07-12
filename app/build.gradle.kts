@@ -82,4 +82,9 @@ dependencies {
     implementation(libs.miuix.icons)
     implementation(libs.miuix.squircle)
     implementation(libs.miuix.navigation3.ui)
+
+    implementation("io.github.kyant0:backdrop:2.0.0")
+    implementation("dev.chrisbanes.haze:haze:2.0.0-alpha03")
+    implementation("dev.chrisbanes.haze:haze-blur:2.0.0-alpha03")
+
 }
