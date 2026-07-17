@@ -14,6 +14,16 @@ android {
         targetSdk = 37
         versionCode = 102
         versionName = "1.0.2"
+
+        ndk {
+            abiFilters.addAll(
+                arrayOf(
+                  "armeabi-v7a",
+                 "arm64-v8a"
+                )
+            )
+        }
+
     }
 
     buildTypes {
